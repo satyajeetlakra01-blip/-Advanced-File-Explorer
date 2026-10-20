@@ -43,6 +43,7 @@ function createWindow() {
     minHeight: 600,
     backgroundColor: '#0f131a',
     title: 'Advanced File Explorer',
+    icon: path.resolve(__dirname, '../../assets/icon.ico'),
     webPreferences: {
       preload: path.resolve(__dirname, '../preload/index.cjs'),
       nodeIntegration: false,
