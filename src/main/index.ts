@@ -189,42 +189,58 @@ function registerIpcHandlers() {
   });
 }
 
-app.whenReady().then(() => {
-  protocol.handle('afe-media', (request) => {
-    try {
-      const url = new URL(request.url);
-      let targetPath = url.searchParams.get('path');
-      if (!targetPath) {
-        const withoutScheme = request.url.replace(/^afe-media:\/\//i, '');
-        let decoded = decodeURIComponent(withoutScheme);
-        if (/^[a-zA-Z]\//.test(decoded)) {
-          decoded = decoded.charAt(0) + ':/' + decoded.slice(2);
-        } else if (/^\/[a-zA-Z]:/.test(decoded)) {
-          decoded = decoded.slice(1);
+// Ensure single instance lock so repeated launches focus existing window
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+
+  app.whenReady().then(() => {
+    protocol.handle('afe-media', (request) => {
+      try {
+        const url = new URL(request.url);
+        let targetPath = url.searchParams.get('path');
+        if (!targetPath) {
+          const withoutScheme = request.url.replace(/^afe-media:\/\//i, '');
+          let decoded = decodeURIComponent(withoutScheme);
+          if (/^[a-zA-Z]\//.test(decoded)) {
+            decoded = decoded.charAt(0) + ':/' + decoded.slice(2);
+          } else if (/^\/[a-zA-Z]:/.test(decoded)) {
+            decoded = decoded.slice(1);
+          }
+          targetPath = decoded;
         }
-        targetPath = decoded;
+        return net.fetch(pathToFileURL(targetPath).toString());
+      } catch (err) {
+        console.error('Failed to stream media asset:', err);
+        return new Response('Not found', { status: 404 });
       }
-      return net.fetch(pathToFileURL(targetPath).toString());
-    } catch (err) {
-      console.error('Failed to stream media asset:', err);
-      return new Response('Not found', { status: 404 });
-    }
+    });
+
+    registerIpcHandlers();
+    createWindow();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      }
+    });
   });
 
-  registerIpcHandlers();
-  createWindow();
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+  app.on('window-all-closed', () => {
+    inspectorService.destroy();
+    searchService.destroy();
+    if (process.platform !== 'darwin') {
+      app.quit();
     }
   });
-});
+}
 
-app.on('window-all-closed', () => {
-  inspectorService.destroy();
-  searchService.destroy();
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});

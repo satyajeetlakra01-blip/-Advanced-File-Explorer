@@ -43,16 +43,19 @@ async function startDev() {
     external: ['electron'],
   });
 
-  // 2. Start Vite server for renderer
+  // 2. Start Vite server for renderer (dynamic port fallback)
   const viteServer = await createServer({
     configFile: resolve(root, 'vite.config.ts'),
-    server: { port: 5173 },
+    server: { port: 5173, strictPort: false },
   });
   await viteServer.listen();
-  console.log('[dev] Vite dev server running at http://localhost:5173');
+  const address = viteServer.httpServer?.address();
+  const port = typeof address === 'object' && address ? address.port : 5173;
+  const devUrl = `http://localhost:${port}`;
+  console.log(`[dev] Vite dev server running at ${devUrl}`);
 
   // 3. Spawn Electron
-  process.env.VITE_DEV_SERVER_URL = 'http://localhost:5173';
+  process.env.VITE_DEV_SERVER_URL = devUrl;
   const electronProcess = spawn('npx', ['electron', '.'], {
     cwd: root,
     stdio: 'inherit',

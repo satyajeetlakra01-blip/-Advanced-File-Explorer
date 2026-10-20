@@ -85,14 +85,22 @@ if ($hasRelease) {
         & git clone $cloneUrl $appDir
     }
 
-    Write-Host '[3/4] Installing Node.js dependencies (this may take a minute)...' -ForegroundColor Yellow
+    Write-Host '[3/4] Installing Node.js dependencies & compiling app...' -ForegroundColor Yellow
     & npm install --prefix $appDir
+
+    Write-Host '    Building production bundle (npm run build)...' -ForegroundColor Yellow
+    & npm run build --prefix $appDir
+
+    # Create launch.bat fallback runner
+    $batPath = $installDir + '\launch.bat'
+    $batContent = "@echo off`r`ncd /d `"%~dp0app`"`r`nif not exist `"dist\renderer\index.html`" (`r`n    call npm run build`r`n)`r`ncall npm start`r`n"
+    Set-Content -Path $batPath -Value $batContent -Encoding ASCII
 
     # Create a VBScript silent launcher (no terminal window flash)
     $vbsPath = $installDir + '\launch.vbs'
     $vbsContent  = 'Set WshShell = CreateObject("WScript.Shell")' + [char]13 + [char]10
     $vbsContent += 'WshShell.CurrentDirectory = "' + $appDir + '"' + [char]13 + [char]10
-    $vbsContent += 'WshShell.Run "cmd /c npm run dev", 0, False' + [char]13 + [char]10
+    $vbsContent += 'WshShell.Run "cmd /c npm start", 0, False' + [char]13 + [char]10
     Set-Content -Path $vbsPath -Value $vbsContent -Encoding ASCII
 
     # Create Start Menu shortcut pointing to VBScript launcher
