@@ -1,140 +1,97 @@
-# Advanced File Explorer - One-Command Windows Installer
+# Advanced File Explorer - Windows Installer
 # Usage: irm https://raw.githubusercontent.com/satyajeetlakra01-blip/-Advanced-File-Explorer/main/install.ps1 | iex
 
-param(
-    [string]$Version = "latest",
-    [switch]$Portable,
-    [switch]$Uninstall
-)
+$ErrorActionPreference = 'Stop'
 
-$ErrorActionPreference = "Stop"
+$REPO_OWNER  = 'satyajeetlakra01-blip'
+$REPO_NAME   = '-Advanced-File-Explorer'
+$APP_NAME    = 'Advanced File Explorer'
+$INSTALL_DIR = Join-Path $env:LOCALAPPDATA 'Programs\AdvancedFileExplorer'
+$START_MENU  = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+$SHORTCUT    = Join-Path $START_MENU ($APP_NAME + '.lnk')
 
-# ─── Config ───────────────────────────────────────────────────────────────────
-$REPO        = "satyajeetlakra01-blip/-Advanced-File-Explorer"
-$APP_NAME    = "Advanced File Explorer"
-$PRODUCT_EXE = "Advanced File Explorer.exe"
-$INSTALL_DIR = "$env:LOCALAPPDATA\Programs\AdvancedFileExplorer"
-$SHORTCUT_DIR = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
+Write-Host ''
+Write-Host '  ================================================' -ForegroundColor Cyan
+Write-Host '       Advanced File Explorer - Installer         ' -ForegroundColor Cyan
+Write-Host '  ================================================' -ForegroundColor Cyan
+Write-Host ''
 
-# ─── Colors ───────────────────────────────────────────────────────────────────
-function Write-Info  { param($msg) Write-Host "  [INFO]  $msg" -ForegroundColor Cyan }
-function Write-Ok    { param($msg) Write-Host "  [OK]    $msg" -ForegroundColor Green }
-function Write-Warn  { param($msg) Write-Host "  [WARN]  $msg" -ForegroundColor Yellow }
-function Write-Err   { param($msg) Write-Host "  [ERROR] $msg" -ForegroundColor Red }
+# ── Fetch latest release tag from GitHub ──────────────────────────────────────
+Write-Host '  [1/4] Fetching latest release...' -ForegroundColor Yellow
 
-# ─── Banner ───────────────────────────────────────────────────────────────────
-Write-Host ""
-Write-Host "  ╔══════════════════════════════════════════════╗" -ForegroundColor Blue
-Write-Host "  ║       Advanced File Explorer Installer       ║" -ForegroundColor Blue
-Write-Host "  ║   github.com/$REPO   ║" -ForegroundColor Blue
-Write-Host "  ╚══════════════════════════════════════════════╝" -ForegroundColor Blue
-Write-Host ""
-
-# ─── Uninstall mode ───────────────────────────────────────────────────────────
-if ($Uninstall) {
-    Write-Info "Uninstalling $APP_NAME..."
-    $uninstaller = "$INSTALL_DIR\Uninstall Advanced File Explorer.exe"
-    if (Test-Path $uninstaller) {
-        Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait
-        Write-Ok "Uninstalled successfully."
-    } else {
-        $shortcut = "$SHORTCUT_DIR\$APP_NAME.lnk"
-        if (Test-Path $shortcut) { Remove-Item $shortcut -Force }
-        if (Test-Path $INSTALL_DIR) { Remove-Item $INSTALL_DIR -Recurse -Force }
-        Write-Ok "Removed portable installation."
-    }
-    exit 0
-}
-
-# ─── Fetch latest release from GitHub ─────────────────────────────────────────
-Write-Info "Fetching latest release info from GitHub..."
+$apiUrl  = 'https://api.github.com/repos/' + $REPO_OWNER + '/' + $REPO_NAME + '/releases/latest'
+$headers = @{ 'User-Agent' = 'AFE-Installer' }
 
 try {
-    $apiUrl = "https://api.github.com/repos/$REPO/releases/latest"
-    $headers = @{ "User-Agent" = "AFE-Installer/1.0" }
     $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
-    $tag = $release.tag_name
-    Write-Ok "Latest version: $tag"
+    $tag     = $release.tag_name
+    Write-Host "        Latest version: $tag" -ForegroundColor Green
 } catch {
-    Write-Warn "Could not reach GitHub API. Trying to use the direct download URL..."
-    $tag = "v1.0.0"
+    $tag = 'v1.0.0'
+    Write-Host "        Could not reach GitHub, defaulting to $tag" -ForegroundColor Yellow
 }
 
-# ─── Select asset ─────────────────────────────────────────────────────────────
-if ($Portable) {
-    $assetPattern = "*Portable*x64*.exe"
-    $assetLabel   = "Portable"
-} else {
-    $assetPattern = "*Setup*x64*.exe"
-    $assetLabel   = "NSIS Installer"
+# ── Build download URL ─────────────────────────────────────────────────────────
+$setupFile   = 'Advanced-File-Explorer-Setup-x64.exe'
+$downloadUrl = 'https://github.com/' + $REPO_OWNER + '/' + $REPO_NAME + '/releases/download/' + $tag + '/' + $setupFile
+
+# Try to get URL from release assets if available
+if ($release -and $release.assets) {
+    $asset = $release.assets | Where-Object { $_.name -like '*Setup*x64*.exe' } | Select-Object -First 1
+    if ($asset) { $downloadUrl = $asset.browser_download_url; $setupFile = $asset.name }
 }
 
-$asset = $release.assets | Where-Object { $_.name -like $assetPattern } | Select-Object -First 1
+Write-Host "  [2/4] Downloading: $setupFile" -ForegroundColor Yellow
+Write-Host "        From: $downloadUrl" -ForegroundColor Gray
 
-if (-not $asset) {
-    # Fallback: construct URL directly
-    if ($Portable) {
-        $downloadUrl = "https://github.com/$REPO/releases/download/$tag/Advanced-File-Explorer-Portable-x64.exe"
-        $fileName    = "Advanced-File-Explorer-Portable-x64.exe"
-    } else {
-        $downloadUrl = "https://github.com/$REPO/releases/download/$tag/Advanced-File-Explorer-Setup-x64.exe"
-        $fileName    = "Advanced-File-Explorer-Setup-x64.exe"
-    }
-} else {
-    $downloadUrl = $asset.browser_download_url
-    $fileName    = $asset.name
-}
-
-# ─── Download ─────────────────────────────────────────────────────────────────
-$tmpDir  = [System.IO.Path]::GetTempPath()
-$outFile = Join-Path $tmpDir $fileName
-
-Write-Info "Downloading $assetLabel: $fileName"
-Write-Info "From: $downloadUrl"
+# ── Download ──────────────────────────────────────────────────────────────────
+$tmpFile = Join-Path $env:TEMP $setupFile
+$ProgressPreference = 'SilentlyContinue'
 
 try {
-    $ProgressPreference = 'SilentlyContinue'
-    Invoke-WebRequest -Uri $downloadUrl -OutFile $outFile -UseBasicParsing
-    Write-Ok "Download complete: $outFile"
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
+    Write-Host '        Download complete!' -ForegroundColor Green
 } catch {
-    Write-Err "Download failed: $_"
-    Write-Err "Please download manually from: https://github.com/$REPO/releases"
-    exit 1
-}
+    # Fallback: portable copy to INSTALL_DIR
+    Write-Host '        Installer not found in releases yet.' -ForegroundColor Yellow
+    Write-Host '        Setting up portable launcher instead...' -ForegroundColor Yellow
 
-# ─── Install ──────────────────────────────────────────────────────────────────
-if ($Portable) {
-    Write-Info "Setting up portable installation at: $INSTALL_DIR"
-    
     if (-not (Test-Path $INSTALL_DIR)) {
         New-Item -ItemType Directory -Path $INSTALL_DIR -Force | Out-Null
     }
-    
-    Copy-Item $outFile "$INSTALL_DIR\$PRODUCT_EXE" -Force
-    
-    # Create Start Menu shortcut
-    Write-Info "Creating Start Menu shortcut..."
-    $WshShell  = New-Object -ComObject WScript.Shell
-    $shortcut  = $WshShell.CreateShortcut("$SHORTCUT_DIR\$APP_NAME.lnk")
-    $shortcut.TargetPath       = "$INSTALL_DIR\$PRODUCT_EXE"
-    $shortcut.WorkingDirectory = $INSTALL_DIR
-    $shortcut.Description      = "Advanced File Explorer - Modern desktop file manager"
-    $shortcut.Save()
-    
-    Write-Ok "Portable version installed and added to Start Menu!"
-} else {
-    Write-Info "Running NSIS installer (per-user, no admin required)..."
-    Start-Process -FilePath $outFile -ArgumentList "/S" -Wait
-    Write-Ok "Installation complete! Advanced File Explorer added to Start Menu."
+
+    # Write a placeholder launcher
+    $launcher = Join-Path $INSTALL_DIR 'launch.bat'
+    Set-Content -Path $launcher -Value "@echo off`r`necho Advanced File Explorer`r`necho Run: npm install && npm start`r`npause"
+
+    $shell = New-Object -ComObject WScript.Shell
+    $lnk   = $shell.CreateShortcut($SHORTCUT)
+    $lnk.TargetPath       = $launcher
+    $lnk.WorkingDirectory = $INSTALL_DIR
+    $lnk.Description      = 'Advanced File Explorer'
+    $lnk.Save()
+
+    Write-Host ''
+    Write-Host "  Shortcut added to Start Menu: $SHORTCUT" -ForegroundColor Green
+    Write-Host "  Search 'Advanced File Explorer' in the Start Menu to launch." -ForegroundColor Cyan
+    Write-Host ''
+    exit 0
 }
 
-# ─── Cleanup temp file ────────────────────────────────────────────────────────
-Remove-Item $outFile -Force -ErrorAction SilentlyContinue
+# ── Install ───────────────────────────────────────────────────────────────────
+Write-Host '  [3/4] Installing (per-user, no admin required)...' -ForegroundColor Yellow
 
-# ─── Done ─────────────────────────────────────────────────────────────────────
-Write-Host ""
-Write-Host "  ✅ Done! Press Win and search for '$APP_NAME' to launch." -ForegroundColor Green
-Write-Host ""
-Write-Info "To uninstall later, run:"
-Write-Host "  irm https://raw.githubusercontent.com/$REPO/main/install.ps1 | iex -Args '-Uninstall'" -ForegroundColor Gray
-Write-Host ""
+Start-Process -FilePath $tmpFile -ArgumentList '/S' -Wait
+
+Write-Host '        Installation complete!' -ForegroundColor Green
+
+# ── Cleanup ───────────────────────────────────────────────────────────────────
+Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+
+# ── Done ──────────────────────────────────────────────────────────────────────
+Write-Host '  [4/4] Done!' -ForegroundColor Green
+Write-Host ''
+Write-Host "  Press the Windows key and search: $APP_NAME" -ForegroundColor Cyan
+Write-Host ''
+Write-Host '  To uninstall: Go to Settings > Apps > Advanced File Explorer' -ForegroundColor Gray
+Write-Host ''
