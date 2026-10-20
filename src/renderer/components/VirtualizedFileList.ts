@@ -1,0 +1,688 @@
+import { appStore } from '../store/appStore';
+import { FileItem, SortField, PaneId } from '../../shared/types';
+import { contextMenu } from './ContextMenu';
+import { FileIcons } from './FileIcons';
+
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
+
+function formatDate(ms: number): string {
+  if (!ms) return '';
+  const d = new Date(ms);
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+// Card dimensions for grid view
+export interface ZoomCardConfig {
+  cardWidth: number;
+  cardHeight: number;
+  gap: number;
+}
+
+export function getZoomCardConfig(zoomLevel: number): ZoomCardConfig {
+  // If legacy 1..4 levels are passed, map them cleanly: 1 -> 15, 2 -> 50, 3 -> 75, 4 -> 100
+  let norm = zoomLevel;
+  if (norm <= 4 && norm > 0) {
+    const legacyMap: Record<number, number> = { 1: 15, 2: 50, 3: 75, 4: 100 };
+    norm = legacyMap[norm] ?? 50;
+  }
+  const t = Math.max(0, Math.min(100, norm - 1)) / 99; // 0.0 to 1.0 across 100 steps
+  const cardWidth = Math.round(80 + t * (280 - 80));
+  const cardHeight = Math.round(cardWidth * 1.08);
+  const gap = Math.round(8 + t * (20 - 8));
+  return { cardWidth, cardHeight, gap };
+}
+
+export class VirtualizedFileList {
+  public paneId: PaneId;
+  private container: HTMLElement;
+  private viewport: HTMLElement | null = null;
+  private spacer: HTMLElement | null = null;
+  private content: HTMLElement | null = null;
+  private marqueeBox: HTMLElement | null = null;
+
+  private rowHeight = 36;
+  private buffer = 6;
+  private focusedIndex = 0;
+  private lastSelectedIndex = -1;
+  private resizeObserver: ResizeObserver | null = null;
+
+  // Selective memoization to prevent UI freeze during background scans
+  private lastRenderKey = '';
+
+  // Rectangular Marquee Selection State
+  private isMarqueeActive = false;
+  private marqueeStartX = 0;
+  private marqueeStartY = 0;
+  private marqueeInitialSelection = new Set<string>();
+
+  constructor(paneId: PaneId = 'left') {
+    this.paneId = paneId;
+    this.container = document.createElement('main');
+    this.container.className = `main-explorer explorer-pane-${paneId}`;
+    this.container.tabIndex = 0; // Enables keyboard focus
+    this.buildSkeleton();
+
+    appStore.subscribe(() => {
+      this.checkAndUpdate();
+    });
+
+    this.attachGlobalKeyboard();
+    this.attachDragAndDrop();
+    this.attachWheelZoom();
+    this.attachMarqueeSelection();
+  }
+
+  get element(): HTMLElement {
+    return this.container;
+  }
+
+  private buildSkeleton() {
+    this.container.innerHTML = `
+      <div class="file-table-container">
+        <div class="file-table-header" id="table-header-${this.paneId}">
+          <div></div>
+          <div class="header-col" data-sort="name">Name <span id="sort-name-${this.paneId}"></span></div>
+          <div class="header-col" data-sort="size">Size <span id="sort-size-${this.paneId}"></span></div>
+          <div class="header-col" data-sort="modified">Date Modified <span id="sort-modified-${this.paneId}"></span></div>
+          <div class="header-col" data-sort="type">Type <span id="sort-type-${this.paneId}"></span></div>
+        </div>
+        <div class="file-list-viewport" id="file-viewport-${this.paneId}">
+          <div class="marquee-selection-box" id="marquee-${this.paneId}"></div>
+          <div class="virtual-scroll-spacer" id="scroll-spacer-${this.paneId}" style="width: 100%; height: 0px; pointer-events: none;"></div>
+          <div class="virtual-scroll-content" id="scroll-content-${this.paneId}" style="position: absolute; top: 0; left: 0; right: 0;"></div>
+        </div>
+      </div>
+    `;
+
+    this.viewport = this.container.querySelector(`#file-viewport-${this.paneId}`);
+    this.spacer = this.container.querySelector(`#scroll-spacer-${this.paneId}`);
+    this.content = this.container.querySelector(`#scroll-content-${this.paneId}`);
+    this.marqueeBox = this.container.querySelector(`#marquee-${this.paneId}`);
+
+    this.viewport?.addEventListener('scroll', () => {
+      this.renderVirtualSlice();
+    });
+
+    this.resizeObserver = new ResizeObserver(() => {
+      this.renderVirtualSlice();
+    });
+    if (this.viewport) {
+      this.resizeObserver.observe(this.viewport);
+    }
+
+    // Header column sorting
+    this.container.querySelectorAll('.header-col').forEach((col) => {
+      col.addEventListener('click', () => {
+        const field = col.getAttribute('data-sort') as SortField;
+        if (field) {
+          appStore.setSorting(field, this.paneId);
+        }
+      });
+    });
+
+    // Right-click canvas for background context menu
+    this.viewport?.addEventListener('contextmenu', (e) => {
+      if ((e.target as HTMLElement).closest('.file-row') || (e.target as HTMLElement).closest('.grid-card')) {
+        return;
+      }
+      e.preventDefault();
+      appStore.setActivePane(this.paneId);
+      const current = appStore.getActiveTab(this.paneId).currentPath;
+      contextMenu.showCanvasMenu(e.clientX, e.clientY, current);
+    });
+
+    // Focus pane on click
+    this.container.addEventListener('mousedown', () => {
+      appStore.setActivePane(this.paneId);
+    });
+  }
+
+  private checkAndUpdate() {
+    const tab = appStore.getActiveTab(this.paneId);
+    const isDual = appStore.getState().isDualPane;
+    const activePane = appStore.getState().activePaneId;
+    const zoom = tab.zoomLevel ?? (tab.viewMode === 'details' ? 0 : 2);
+
+    // Stable key: ignores scan progress ticks & status bar messages completely!
+    const key = `${tab.currentPath}|${tab.items.length}|${tab.filterQuery}|${tab.viewMode}|${zoom}|${tab.sortField}|${tab.sortDirection}|${tab.selectedPaths.size}|${isDual}|${activePane === this.paneId}`;
+
+    if (key !== this.lastRenderKey) {
+      this.lastRenderKey = key;
+      this.updateView();
+    }
+  }
+
+  private getFilteredItems(): FileItem[] {
+    const activeTab = appStore.getActiveTab(this.paneId);
+    const { items, filterQuery } = activeTab;
+    if (!filterQuery) return items;
+    return items.filter((item) => item.name.toLowerCase().includes(filterQuery.toLowerCase()));
+  }
+
+  private updateView() {
+    const activeTab = appStore.getActiveTab(this.paneId);
+    const { sortField, sortDirection } = activeTab;
+    const zoomLevel = activeTab.zoomLevel ?? (activeTab.viewMode === 'details' ? 0 : 2);
+    const isDetails = zoomLevel === 0;
+
+    const header = this.container.querySelector(`#table-header-${this.paneId}`) as HTMLElement;
+    if (header) {
+      header.style.display = isDetails ? 'grid' : 'none';
+      ['name', 'size', 'modified', 'type'].forEach((f) => {
+        const el = this.container.querySelector(`#sort-${f}-${this.paneId}`);
+        if (el) {
+          el.textContent = sortField === f ? (sortDirection === 'asc' ? '▲' : '▼') : '';
+        }
+      });
+    }
+
+    this.renderVirtualSlice();
+  }
+
+  private renderVirtualSlice() {
+    if (!this.viewport || !this.spacer || !this.content) return;
+
+    const items = this.getFilteredItems();
+    const activeTab = appStore.getActiveTab(this.paneId);
+    const { selectedPaths } = activeTab;
+    const zoomLevel = activeTab.zoomLevel ?? (activeTab.viewMode === 'details' ? 0 : 2);
+    const isDetails = zoomLevel === 0;
+
+    if (items.length === 0) {
+      this.spacer.style.height = '0px';
+      this.content.style.transform = 'translateY(0px)';
+      this.content.innerHTML = `
+        <div class="empty-folder-state">
+          <div class="empty-folder-icon">
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" opacity="0.45">
+              <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+            </svg>
+          </div>
+          <div class="empty-folder-title">This folder is empty</div>
+          <div class="empty-folder-sub">Drag files here or press Ctrl+Shift+N to create a folder</div>
+        </div>
+      `;
+      return;
+    }
+
+    const scrollTop = this.viewport.scrollTop;
+    const viewportHeight = this.viewport.clientHeight || 500;
+    const viewportWidth = this.viewport.clientWidth || 800;
+
+    if (isDetails) {
+      // Smallest View: Details Rows
+      const effectiveRowHeight = this.rowHeight;
+      const totalHeight = items.length * effectiveRowHeight;
+      this.spacer.style.height = `${totalHeight}px`;
+
+      const startIndex = Math.max(0, Math.floor(scrollTop / effectiveRowHeight) - this.buffer);
+      const visibleCount = Math.ceil(viewportHeight / effectiveRowHeight);
+      const endIndex = Math.min(items.length, startIndex + visibleCount + this.buffer * 2);
+      const offsetY = startIndex * effectiveRowHeight;
+
+      this.content.style.transform = `translateY(${offsetY}px)`;
+      this.content.style.display = 'block';
+      this.content.style.padding = '0';
+      this.content.style.gap = '0';
+
+      let html = '';
+      for (let i = startIndex; i < endIndex; i++) {
+        const item = items[i];
+        const isSelected = selectedPaths.has(item.path);
+        const isFocused = i === this.focusedIndex;
+        const iconSvg = FileIcons.getListIcon(item, 18);
+
+        html += `
+          <div class="file-row ${isSelected ? 'selected' : ''} ${isFocused ? 'focused' : ''}" data-index="${i}" data-path="${item.path}" draggable="true" style="height:${effectiveRowHeight}px;">
+            <div class="file-icon">${iconSvg}</div>
+            <div class="file-name" title="${item.name}">${item.name}</div>
+            <div class="file-size">${item.isDirectory ? '' : formatBytes(item.sizeBytes)}</div>
+            <div class="file-date">${formatDate(item.modifiedMs)}</div>
+            <div class="file-type">${item.typeDescription}</div>
+          </div>
+        `;
+      }
+      this.content.innerHTML = html;
+    } else {
+      // Scaled Grid View
+      const config = getZoomCardConfig(zoomLevel);
+      const { cardWidth, cardHeight, gap } = config;
+
+      const availableWidth = Math.max(cardWidth, viewportWidth - 32);
+      const cols = Math.max(1, Math.floor((availableWidth + gap) / (cardWidth + gap)));
+      const totalRows = Math.ceil(items.length / cols);
+      const rowStep = cardHeight + gap;
+      const totalHeight = totalRows * rowStep;
+      this.spacer.style.height = `${totalHeight}px`;
+
+      const startRow = Math.max(0, Math.floor(scrollTop / rowStep) - 2);
+      const visibleRows = Math.ceil(viewportHeight / rowStep) + 3;
+      const endRow = Math.min(totalRows, startRow + visibleRows);
+
+      const startIndex = startRow * cols;
+      const endIndex = Math.min(items.length, endRow * cols);
+      const offsetY = startRow * rowStep;
+
+      this.content.style.transform = `translateY(${offsetY}px)`;
+      this.content.style.display = 'grid';
+      this.content.style.gridTemplateColumns = `repeat(${cols}, ${cardWidth}px)`;
+      this.content.style.gap = `${gap}px`;
+      this.content.style.padding = '14px 16px';
+
+      let html = '';
+      for (let i = startIndex; i < endIndex; i++) {
+        const item = items[i];
+        const isSelected = selectedPaths.has(item.path);
+        const isFocused = i === this.focusedIndex;
+        const previewHtml = FileIcons.getGridPreview(item, cardWidth);
+
+        html += `
+          <div 
+            class="grid-card ${isSelected ? 'selected' : ''} ${isFocused ? 'focused' : ''} zoom-level-${zoomLevel}" 
+            data-index="${i}" 
+            data-path="${item.path}" 
+            draggable="true" 
+            style="width:${cardWidth}px; height:${cardHeight}px;"
+          >
+            ${previewHtml}
+            <div class="grid-card-meta">
+              <div class="grid-card-name" title="${item.name}">${item.name}</div>
+              <div class="grid-card-size">${item.isDirectory ? 'Folder' : formatBytes(item.sizeBytes)}</div>
+            </div>
+          </div>
+        `;
+      }
+      this.content.innerHTML = html;
+    }
+
+    this.attachItemEvents(items);
+  }
+
+  private attachItemEvents(visibleItems: FileItem[]) {
+    if (!this.content) return;
+
+    this.content.querySelectorAll('[data-index]').forEach((el) => {
+      const index = parseInt(el.getAttribute('data-index') || '0', 10);
+      const item = visibleItems[index];
+      if (!item) return;
+
+      el.addEventListener('click', (e) => {
+        appStore.setActivePane(this.paneId);
+        const mouseEvent = e as MouseEvent;
+        this.focusedIndex = index;
+
+        if (mouseEvent.shiftKey && this.lastSelectedIndex !== -1) {
+          const start = Math.min(this.lastSelectedIndex, index);
+          const end = Math.max(this.lastSelectedIndex, index);
+          const rangePaths = visibleItems.slice(start, end + 1).map((i) => i.path);
+          appStore.setSelection(rangePaths, this.paneId);
+        } else if (mouseEvent.ctrlKey) {
+          appStore.toggleSelection(item.path, this.paneId);
+          this.lastSelectedIndex = index;
+        } else {
+          appStore.setSelection([item.path], this.paneId);
+          this.lastSelectedIndex = index;
+        }
+
+        if (item.isDirectory) {
+          appStore.setState({ inspectorTarget: item });
+          window.dispatchEvent(new CustomEvent('app:inspect-folder', { detail: { folder: item } }));
+        }
+      });
+
+      el.addEventListener('dblclick', () => {
+        appStore.setActivePane(this.paneId);
+        if (item.isDirectory) {
+          window.dispatchEvent(new CustomEvent('app:navigate', { detail: { path: item.path, paneId: this.paneId } }));
+        } else {
+          window.dispatchEvent(new CustomEvent('app:open-file', { detail: { path: item.path } }));
+        }
+      });
+
+      el.addEventListener('contextmenu', (e) => {
+        appStore.setActivePane(this.paneId);
+        e.preventDefault();
+        e.stopPropagation();
+        const activeTab = appStore.getActiveTab(this.paneId);
+        if (!activeTab.selectedPaths.has(item.path)) {
+          appStore.setSelection([item.path], this.paneId);
+        }
+        const mouseEvent = e as MouseEvent;
+        contextMenu.showItemMenu(mouseEvent.clientX, mouseEvent.clientY, item);
+      });
+
+      // Drag source
+      el.addEventListener('dragstart', (e) => {
+        const dragEvent = e as DragEvent;
+        appStore.setActivePane(this.paneId);
+        const activeTab = appStore.getActiveTab(this.paneId);
+        const selected = Array.from(activeTab.selectedPaths.size > 0 ? activeTab.selectedPaths : [item.path]);
+
+        if (dragEvent.dataTransfer) {
+          dragEvent.dataTransfer.setData(
+            'application/afe-pane-transfer',
+            JSON.stringify({
+              sources: selected,
+              sourcePane: this.paneId,
+            })
+          );
+          dragEvent.dataTransfer.effectAllowed = 'copyMove';
+        }
+      });
+
+      // Drag target: Allow dropping files directly into collapsed folder items!
+      if (item.isDirectory) {
+        el.addEventListener('dragover', (e) => {
+          const dragEvent = e as DragEvent;
+          dragEvent.preventDefault();
+          dragEvent.stopPropagation();
+          if (dragEvent.dataTransfer) {
+            dragEvent.dataTransfer.dropEffect = dragEvent.ctrlKey ? 'copy' : 'move';
+          }
+          el.classList.add('folder-drop-target');
+        });
+
+        el.addEventListener('dragleave', (e) => {
+          const dragEvent = e as DragEvent;
+          const related = dragEvent.relatedTarget as HTMLElement | null;
+          if (!el.contains(related)) {
+            el.classList.remove('folder-drop-target');
+          }
+        });
+
+        el.addEventListener('drop', (e) => {
+          const dragEvent = e as DragEvent;
+          dragEvent.preventDefault();
+          dragEvent.stopPropagation();
+          el.classList.remove('folder-drop-target');
+
+          const raw = dragEvent.dataTransfer?.getData('application/afe-pane-transfer');
+          if (!raw) return;
+
+          try {
+            const payload = JSON.parse(raw);
+            const sources: string[] = payload.sources || [];
+            // Do not drop a folder into itself
+            const validSources = sources.filter((src) => src !== item.path);
+            if (validSources.length > 0) {
+              window.dispatchEvent(
+                new CustomEvent('app:cross-pane-transfer', {
+                  detail: {
+                    sources: validSources,
+                    destination: item.path,
+                    mode: dragEvent.ctrlKey ? 'COPY' : 'MOVE',
+                    sourcePane: payload.sourcePane,
+                    destPane: this.paneId,
+                  },
+                })
+              );
+            }
+          } catch (err) {
+            console.error('Failed to parse folder drop payload:', err);
+          }
+        });
+      }
+    });
+  }
+
+  // --- Wheel Zoom: Ctrl + Wheel ---
+  private attachWheelZoom() {
+    if (!this.viewport) return;
+
+    this.viewport.addEventListener(
+      'wheel',
+      (e) => {
+        if (e.ctrlKey) {
+          e.preventDefault();
+          const delta = e.deltaY < 0 ? 4 : -4;
+          appStore.adjustZoom(delta, this.paneId);
+        }
+      },
+      { passive: false }
+    );
+  }
+
+  // --- Rectangular Marquee Box Selection ---
+  private attachMarqueeSelection() {
+    if (!this.viewport || !this.marqueeBox) return;
+
+    this.viewport.addEventListener('mousedown', (e: MouseEvent) => {
+      // Don't start marquee if user clicked on a file item or header
+      const target = e.target as HTMLElement;
+      if (
+        target.closest('.file-row') ||
+        target.closest('.grid-card') ||
+        target.closest('.header-col') ||
+        e.button !== 0 // Only left click
+      ) {
+        return;
+      }
+
+      appStore.setActivePane(this.paneId);
+      const viewportRect = this.viewport!.getBoundingClientRect();
+
+      this.isMarqueeActive = true;
+      this.marqueeStartX = e.clientX - viewportRect.left + this.viewport!.scrollLeft;
+      this.marqueeStartY = e.clientY - viewportRect.top + this.viewport!.scrollTop;
+
+      const activeTab = appStore.getActiveTab(this.paneId);
+      this.marqueeInitialSelection = e.ctrlKey || e.shiftKey ? new Set(activeTab.selectedPaths) : new Set();
+
+      if (!e.ctrlKey && !e.shiftKey) {
+        appStore.setSelection([], this.paneId);
+      }
+
+      this.marqueeBox!.style.left = `${this.marqueeStartX}px`;
+      this.marqueeBox!.style.top = `${this.marqueeStartY}px`;
+      this.marqueeBox!.style.width = '0px';
+      this.marqueeBox!.style.height = '0px';
+      this.marqueeBox!.style.display = 'block';
+    });
+
+    window.addEventListener('mousemove', (e: MouseEvent) => {
+      if (!this.isMarqueeActive || !this.viewport || !this.marqueeBox || !this.content) return;
+
+      const viewportRect = this.viewport.getBoundingClientRect();
+      const currentX = e.clientX - viewportRect.left + this.viewport.scrollLeft;
+      const currentY = e.clientY - viewportRect.top + this.viewport.scrollTop;
+
+      const boxLeft = Math.min(this.marqueeStartX, currentX);
+      const boxTop = Math.min(this.marqueeStartY, currentY);
+      const boxWidth = Math.abs(currentX - this.marqueeStartX);
+      const boxHeight = Math.abs(currentY - this.marqueeStartY);
+
+      this.marqueeBox.style.left = `${boxLeft}px`;
+      this.marqueeBox.style.top = `${boxTop}px`;
+      this.marqueeBox.style.width = `${boxWidth}px`;
+      this.marqueeBox.style.height = `${boxHeight}px`;
+
+      if (boxWidth < 4 && boxHeight < 4) return;
+
+      // Real-time AABB Intersection against rendered DOM elements
+      const boxRight = boxLeft + boxWidth;
+      const boxBottom = boxTop + boxHeight;
+
+      const newSelected = new Set(this.marqueeInitialSelection);
+      const itemElements = this.content.querySelectorAll('[data-path]');
+
+      itemElements.forEach((itemEl) => {
+        const htmlItem = itemEl as HTMLElement;
+        const itemLeft = htmlItem.offsetLeft;
+        const itemTop = htmlItem.offsetTop;
+        const itemRight = itemLeft + htmlItem.offsetWidth;
+        const itemBottom = itemTop + htmlItem.offsetHeight;
+
+        const intersects = !(boxLeft > itemRight || boxRight < itemLeft || boxTop > itemBottom || boxBottom < itemTop);
+
+        const path = htmlItem.getAttribute('data-path');
+        if (path) {
+          if (intersects) {
+            newSelected.add(path);
+          } else if (!this.marqueeInitialSelection.has(path)) {
+            newSelected.delete(path);
+          }
+        }
+      });
+
+      appStore.setSelection(Array.from(newSelected), this.paneId);
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (this.isMarqueeActive && this.marqueeBox) {
+        this.isMarqueeActive = false;
+        this.marqueeBox.style.display = 'none';
+      }
+    });
+  }
+
+  private attachDragAndDrop() {
+    this.container.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
+      }
+      this.container.classList.add('drag-over-active');
+    });
+
+    this.container.addEventListener('dragleave', (e) => {
+      if ((e.relatedTarget as HTMLElement)?.closest(`.explorer-pane-${this.paneId}`) === null) {
+        this.container.classList.remove('drag-over-active');
+      }
+    });
+
+    this.container.addEventListener('drop', (e) => {
+      e.preventDefault();
+      this.container.classList.remove('drag-over-active');
+
+      const raw = e.dataTransfer?.getData('application/afe-pane-transfer');
+      if (!raw) return;
+
+      try {
+        const payload = JSON.parse(raw);
+        if (payload.sources && payload.sources.length > 0 && payload.sourcePane !== this.paneId) {
+          const dest = appStore.getActiveTab(this.paneId).currentPath;
+          if (dest) {
+            window.dispatchEvent(
+              new CustomEvent('app:cross-pane-transfer', {
+                detail: {
+                  sources: payload.sources,
+                  destination: dest,
+                  mode: e.ctrlKey ? 'COPY' : 'MOVE',
+                  sourcePane: payload.sourcePane,
+                  destPane: this.paneId,
+                },
+              })
+            );
+          }
+        }
+      } catch (err) {
+        console.error('Failed to parse drag transfer payload:', err);
+      }
+    });
+  }
+
+  private attachGlobalKeyboard() {
+    this.container.addEventListener('keydown', (e) => {
+      // Zoom shortcuts: Ctrl + '=', Ctrl + '-', Ctrl + '0'
+      if (e.ctrlKey && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        appStore.adjustZoom(5, this.paneId);
+        return;
+      }
+      if (e.ctrlKey && (e.key === '-' || e.key === '_')) {
+        e.preventDefault();
+        appStore.adjustZoom(-5, this.paneId);
+        return;
+      }
+      if (e.ctrlKey && e.key === '0') {
+        e.preventDefault();
+        appStore.setZoomLevel(50, this.paneId);
+        return;
+      }
+
+      const items = this.getFilteredItems();
+      if (items.length === 0) return;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        this.focusedIndex = Math.min(items.length - 1, this.focusedIndex + 1);
+        const item = items[this.focusedIndex];
+        if (item) {
+          appStore.setSelection([item.path], this.paneId);
+          this.ensureIndexVisible(this.focusedIndex);
+          if (item.isDirectory) {
+            appStore.setState({ inspectorTarget: item });
+            window.dispatchEvent(new CustomEvent('app:inspect-folder', { detail: { folder: item } }));
+          }
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        this.focusedIndex = Math.max(0, this.focusedIndex - 1);
+        const item = items[this.focusedIndex];
+        if (item) {
+          appStore.setSelection([item.path], this.paneId);
+          this.ensureIndexVisible(this.focusedIndex);
+          if (item.isDirectory) {
+            appStore.setState({ inspectorTarget: item });
+            window.dispatchEvent(new CustomEvent('app:inspect-folder', { detail: { folder: item } }));
+          }
+        }
+      } else if (e.key === 'Enter') {
+        const item = items[this.focusedIndex];
+        if (item) {
+          if (item.isDirectory) {
+            window.dispatchEvent(new CustomEvent('app:navigate', { detail: { path: item.path, paneId: this.paneId } }));
+          } else {
+            window.dispatchEvent(new CustomEvent('app:open-file', { detail: { path: item.path } }));
+          }
+        }
+      } else if (e.key === 'Backspace') {
+        window.dispatchEvent(new CustomEvent('app:navigate-up', { detail: { paneId: this.paneId } }));
+      } else if (e.key === ' ' && !e.ctrlKey) {
+        e.preventDefault();
+        const item = items[this.focusedIndex];
+        if (item) {
+          appStore.toggleSelection(item.path, this.paneId);
+        }
+      } else if (e.ctrlKey && e.key === 'a') {
+        e.preventDefault();
+        appStore.setSelection(items.map((i) => i.path), this.paneId);
+      } else if (e.key === 'F2') {
+        const item = items[this.focusedIndex];
+        if (item) {
+          window.dispatchEvent(new CustomEvent('app:trigger-rename', { detail: { item } }));
+        }
+      } else if (e.key === 'Delete') {
+        const activeTab = appStore.getActiveTab(this.paneId);
+        if (activeTab.selectedPaths.size > 0) {
+          window.dispatchEvent(new CustomEvent('app:trigger-delete', { detail: { paths: Array.from(activeTab.selectedPaths) } }));
+        }
+      }
+    });
+  }
+
+  private ensureIndexVisible(index: number) {
+    if (!this.viewport) return;
+    const tab = appStore.getActiveTab(this.paneId);
+    const zoomLevel = tab.zoomLevel ?? (tab.viewMode === 'details' ? 0 : 2);
+    const isDetails = zoomLevel === 0;
+
+    if (isDetails) {
+      const effectiveHeight = this.rowHeight;
+      const targetTop = index * effectiveHeight;
+      const targetBottom = targetTop + effectiveHeight;
+
+      if (targetTop < this.viewport.scrollTop) {
+        this.viewport.scrollTop = targetTop;
+      } else if (targetBottom > this.viewport.scrollTop + this.viewport.clientHeight) {
+        this.viewport.scrollTop = targetBottom - this.viewport.clientHeight;
+      }
+    }
+  }
+}
