@@ -43,3 +43,7 @@ coverage/
 # Temporary files
 *.tmp
 *.temp
+
+# Websites and showcases
+landing/
+antigravity-showcase/

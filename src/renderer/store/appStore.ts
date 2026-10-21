@@ -383,6 +383,12 @@ class AppStore {
     this.notify();
   }
 
+  clearSelection(paneId?: PaneId) {
+    const tab = this.getActiveTab(paneId);
+    tab.selectedPaths = new Set();
+    this.notify();
+  }
+
   setSorting(field: SortField, paneId?: PaneId) {
     const tab = this.getActiveTab(paneId);
     if (tab.sortField === field) {
@@ -399,6 +405,8 @@ class AppStore {
     const tab = this.getActiveTab(paneId);
     const { sortField, sortDirection } = tab;
     const factor = sortDirection === 'asc' ? 1 : -1;
+    const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+    const typeCollator = new Intl.Collator(undefined, { sensitivity: 'base' });
 
     tab.items.sort((a, b) => {
       if (a.isDirectory && !b.isDirectory) return -1;
@@ -406,13 +414,13 @@ class AppStore {
 
       switch (sortField) {
         case 'name':
-          return factor * a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+          return factor * nameCollator.compare(a.name, b.name);
         case 'size':
           return factor * (a.sizeBytes - b.sizeBytes);
         case 'modified':
           return factor * (a.modifiedMs - b.modifiedMs);
         case 'type':
-          return factor * a.typeDescription.localeCompare(b.typeDescription);
+          return factor * typeCollator.compare(a.typeDescription, b.typeDescription);
         default:
           return 0;
       }

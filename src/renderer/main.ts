@@ -10,6 +10,7 @@ import { taskDrawer } from './components/TaskDrawer';
 import { previewPanel } from './components/PreviewPanel';
 import { searchResultsModal } from './components/SearchResultsModal';
 import { macGlassPreview } from './components/MacGlassPreview';
+import { codeSandbox } from './components/CodeSandboxModal';
 import { PaneId } from '../shared/types';
 
 async function bootstrap() {
@@ -202,8 +203,17 @@ async function bootstrap() {
   window.addEventListener('app:open-file', async (e: any) => {
     if (e.detail?.path) {
       const ext = e.detail.path.toLowerCase().split('.').pop() || '';
-      const isMediaOrDoc = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'webm', 'mov', 'mkv', 'pdf', 'mp3', 'wav', 'flac'].includes(ext);
-      if (isMediaOrDoc) {
+      const isMedia = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'webm', 'mov', 'mkv', 'pdf', 'mp3', 'wav', 'flac'].includes(ext);
+      const isCodeOrText = [
+        'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'json', 'html', 'css', 'scss', 'less',
+        'py', 'rs', 'go', 'c', 'cpp', 'h', 'hpp', 'java', 'cs', 'php', 'rb',
+        'sh', 'bash', 'ps1', 'bat', 'cmd', 'md', 'txt', 'yml', 'yaml', 'toml',
+        'xml', 'sql', 'env', 'ini', 'cfg', 'log', 'csv', 'tsv'
+      ].includes(ext);
+
+      if (isCodeOrText) {
+        codeSandbox.open(e.detail.path);
+      } else if (isMedia) {
         macGlassPreview.open(e.detail.path);
       } else {
         await window.electronApi.openPath(e.detail.path);
@@ -221,7 +231,16 @@ async function bootstrap() {
 
   window.addEventListener('app:preview-file', (e: any) => {
     if (e.detail?.path) {
-      macGlassPreview.open(e.detail.path);
+      const ext = e.detail.path.toLowerCase().split('.').pop() || '';
+      const isCode = [
+        'ts', 'tsx', 'js', 'jsx', 'json', 'html', 'css', 'scss',
+        'py', 'rs', 'go', 'c', 'cpp', 'h', 'java', 'sh', 'ps1', 'bat', 'md', 'txt'
+      ].includes(ext);
+      if (isCode) {
+        codeSandbox.open(e.detail.path);
+      } else {
+        macGlassPreview.open(e.detail.path);
+      }
     }
   });
 
@@ -261,17 +280,23 @@ async function bootstrap() {
         Modals.showToast('Transfer cancelled by user');
       } else if (res.success) {
         Modals.showToast(
-          `${mode === 'COPY' ? 'Copied' : 'Moved'} ${res.transferred} items across panes`
+          `${mode === 'COPY' ? 'Copied' : 'Moved'} ${res.transferred} items`
         );
-        // Refresh both source and destination panes
+        // Refresh panes after transfer
         if (sourcePane) {
           const srcPath = appStore.getActiveTab(sourcePane).currentPath;
           if (srcPath) navigateTo(srcPath, false, sourcePane);
         }
-        if (destPane) {
-          navigateTo(destination, false, destPane);
-        } else {
-          navigateTo(destination, false);
+        if (destPane && destPane !== sourcePane) {
+          const destCurrent = appStore.getActiveTab(destPane).currentPath;
+          if (destCurrent && destCurrent.toLowerCase() === destination.toLowerCase()) {
+            navigateTo(destination, false, destPane);
+          } else if (destCurrent) {
+            navigateTo(destCurrent, false, destPane);
+          }
+        } else if (!sourcePane) {
+          const activeCurrent = appStore.getState().currentPath;
+          if (activeCurrent) navigateTo(activeCurrent, false);
         }
       } else {
         Modals.showToast(`Transfer error: ${res.error}`);
@@ -284,15 +309,53 @@ async function bootstrap() {
 
   // Operations: Rename, New Folder, Delete, Paste
   window.addEventListener('app:trigger-rename', (e: any) => {
-    const item = e.detail?.item;
-    if (!item) return;
+    let item = e.detail?.item;
+    const activePane = appStore.getState().activePaneId;
+    const activeTab = appStore.getActiveTab(activePane);
+
+    if (!item) {
+      if (e.detail?.path) {
+        const p = e.detail.path;
+        item = activeTab.items.find((i) => i.path.toLowerCase() === p.toLowerCase()) || {
+          path: p,
+          name: p.split(/[\\/]/).filter(Boolean).pop() || p,
+          isDirectory: false,
+          isFile: true,
+          sizeBytes: 0,
+          modifiedMs: Date.now(),
+        };
+      } else {
+        const selected = Array.from(activeTab.selectedPaths);
+        if (selected.length === 1) {
+          const p = selected[0];
+          item = activeTab.items.find((i) => i.path.toLowerCase() === p.toLowerCase()) || {
+            path: p,
+            name: p.split(/[\\/]/).filter(Boolean).pop() || p,
+            isDirectory: false,
+            isFile: true,
+            sizeBytes: 0,
+            modifiedMs: Date.now(),
+          };
+        }
+      }
+    }
+
+    if (!item) {
+      Modals.showToast('Please select a single file or folder to rename');
+      return;
+    }
 
     Modals.promptRename(item, async (newName) => {
       const res = await window.electronApi.renameItem(item.path, newName);
       if (res.success) {
         Modals.showToast(`Renamed to '${newName}'`);
-        const current = appStore.getState().currentPath;
-        if (current) navigateTo(current, false);
+        const current = activeTab.currentPath || appStore.getState().currentPath;
+        if (current) {
+          await navigateTo(current, false, activePane);
+          if (res.newPath) {
+            appStore.setSelection([res.newPath], activePane);
+          }
+        }
       } else {
         throw new Error(res.error || 'Rename failed');
       }
@@ -457,6 +520,22 @@ async function bootstrap() {
       if (next) navigateTo(next, false);
     } else if (e.altKey && e.key === 'ArrowUp') {
       window.dispatchEvent(new CustomEvent('app:navigate-up'));
+    } else if (e.key === 'F2') {
+      const activeEl = document.activeElement;
+      if (activeEl?.tagName !== 'INPUT' && activeEl?.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('app:trigger-rename'));
+      }
+    } else if (e.ctrlKey && (e.key === 'e' || e.key === 'E') && !e.shiftKey) {
+      const activeEl = document.activeElement;
+      if (activeEl?.tagName !== 'INPUT' && activeEl?.tagName !== 'TEXTAREA') {
+        const activeTab = appStore.getActiveTab();
+        const selected = Array.from(activeTab.selectedPaths);
+        if (selected.length === 1) {
+          e.preventDefault();
+          codeSandbox.open(selected[0]);
+        }
+      }
     } else if (e.key === 'F5' || (e.ctrlKey && e.key === 'r')) {
       e.preventDefault();
       window.dispatchEvent(new CustomEvent('app:refresh'));

@@ -32,8 +32,23 @@ export const IPC_CHANNELS = {
   PREVIEW_GET_CONTENT: 'preview:get-content',
   SHELL_OPEN_PATH: 'shell:open-path',
   SHELL_SHOW_IN_FOLDER: 'shell:show-in-folder',
+  SHELL_START_DRAG: 'shell:start-drag',
+  SHELL_STAT_FILE: 'shell:stat-file',
   APP_GET_THEME: 'app:get-theme',
+  FILE_READ_TEXT: 'file:read-text',
+  FILE_WRITE_TEXT: 'file:write-text',
+  CODE_RUN_SANDBOX: 'sandbox:run-code',
 } as const;
+
+export interface CodeExecutionResult {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  exitCode: number;
+  result?: any;
+  error?: string;
+}
 
 export interface IpcApi {
   getDrives(): Promise<DriveInfo[]>;
@@ -65,6 +80,11 @@ export interface IpcApi {
   onOperationProgress(callback: (progress: FileOperationProgress) => void): () => void;
   openPath(path: string): Promise<string>;
   showInFolder(path: string): Promise<void>;
+  startExternalDrag(paths: string[]): void;
+  statFile(filePath: string): Promise<{ sizeBytes: number; modifiedMs: number } | null>;
+  readTextFile(filePath: string): Promise<{ success: boolean; content?: string; sizeBytes?: number; modifiedMs?: number; error?: string }>;
+  writeTextFile(filePath: string, content: string): Promise<{ success: boolean; sizeBytes?: number; modifiedMs?: number; error?: string }>;
+  runCodeSandbox(params: { code: string; language: string; filePath?: string }): Promise<CodeExecutionResult>;
 }
 
 declare global {

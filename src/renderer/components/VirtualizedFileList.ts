@@ -314,6 +314,7 @@ export class VirtualizedFileList {
 
       el.addEventListener('click', (e) => {
         appStore.setActivePane(this.paneId);
+        this.container.focus();
         const mouseEvent = e as MouseEvent;
         this.focusedIndex = index;
 
@@ -362,17 +363,60 @@ export class VirtualizedFileList {
         const dragEvent = e as DragEvent;
         appStore.setActivePane(this.paneId);
         const activeTab = appStore.getActiveTab(this.paneId);
-        const selected = Array.from(activeTab.selectedPaths.size > 0 ? activeTab.selectedPaths : [item.path]);
+
+        let sources: string[];
+        if (activeTab.selectedPaths.has(item.path)) {
+          sources = Array.from(activeTab.selectedPaths);
+        } else {
+          sources = [item.path];
+          appStore.setSelection([item.path], this.paneId);
+        }
 
         if (dragEvent.dataTransfer) {
-          dragEvent.dataTransfer.setData(
-            'application/afe-pane-transfer',
-            JSON.stringify({
-              sources: selected,
-              sourcePane: this.paneId,
-            })
-          );
+          const payload = JSON.stringify({
+            sources,
+            sourcePane: this.paneId,
+          });
+          dragEvent.dataTransfer.setData('application/afe-pane-transfer', payload);
+          dragEvent.dataTransfer.setData('text/plain', sources.join('\n'));
+          // Provide file URIs so external apps (browsers, explorer) can accept drops
+          const uriList = sources.map(p => `file:///${p.replace(/\\/g, '/')}`).join('\r\n');
+          dragEvent.dataTransfer.setData('text/uri-list', uriList);
           dragEvent.dataTransfer.effectAllowed = 'copyMove';
+
+          // Floating multi-item drag preview badge
+          if (sources.length > 1) {
+            const dragBadge = document.createElement('div');
+            dragBadge.className = 'drag-ghost-badge';
+            dragBadge.style.cssText = 'position:absolute; top:-1000px; left:-1000px; background:rgba(20,24,36,0.95); border:1px solid #ef233c; color:#fff; padding:6px 14px; border-radius:20px; font-size:12px; font-weight:600; display:flex; align-items:center; gap:6px; box-shadow:0 10px 25px rgba(0,0,0,0.7);';
+            dragBadge.innerHTML = `<span>📂</span><span>${sources.length} items</span>`;
+            document.body.appendChild(dragBadge);
+            dragEvent.dataTransfer.setDragImage(dragBadge, 15, 15);
+            setTimeout(() => dragBadge.remove(), 100);
+          }
+        }
+      });
+
+      // External OS drag-out: when drag ends with no internal drop target,
+      // trigger native OS startDrag so files can be dropped into Explorer, Chrome, etc.
+      el.addEventListener('dragend', (e) => {
+        const dragEvent = e as DragEvent;
+        // dropEffect 'none' means the drag was not accepted by any internal drop zone
+        // OR the user dragged outside the app window — trigger native OS drag
+        if (dragEvent.dataTransfer?.dropEffect === 'none') {
+          const activeTab = appStore.getActiveTab(this.paneId);
+          let sources: string[];
+          if (activeTab.selectedPaths.has(item.path)) {
+            sources = Array.from(activeTab.selectedPaths);
+          } else {
+            sources = [item.path];
+          }
+          // Trigger native OS-level drag so external apps can receive the files
+          try {
+            (window.electronApi as any).startExternalDrag?.(sources);
+          } catch {
+            // Silently ignore if not available
+          }
         }
       });
 
@@ -403,28 +447,44 @@ export class VirtualizedFileList {
           el.classList.remove('folder-drop-target');
 
           const raw = dragEvent.dataTransfer?.getData('application/afe-pane-transfer');
-          if (!raw) return;
+          let sources: string[] = [];
+          let sourcePane = this.paneId;
 
-          try {
-            const payload = JSON.parse(raw);
-            const sources: string[] = payload.sources || [];
-            // Do not drop a folder into itself
-            const validSources = sources.filter((src) => src !== item.path);
-            if (validSources.length > 0) {
-              window.dispatchEvent(
-                new CustomEvent('app:cross-pane-transfer', {
-                  detail: {
-                    sources: validSources,
-                    destination: item.path,
-                    mode: dragEvent.ctrlKey ? 'COPY' : 'MOVE',
-                    sourcePane: payload.sourcePane,
-                    destPane: this.paneId,
-                  },
-                })
-              );
+          if (raw) {
+            try {
+              const payload = JSON.parse(raw);
+              sources = payload.sources || [];
+              sourcePane = payload.sourcePane || this.paneId;
+            } catch (err) {
+              console.error('Failed to parse folder drop payload:', err);
             }
-          } catch (err) {
-            console.error('Failed to parse folder drop payload:', err);
+          } else if (dragEvent.dataTransfer?.files && dragEvent.dataTransfer.files.length > 0) {
+            sources = Array.from(dragEvent.dataTransfer.files)
+              .map((f: any) => f.path)
+              .filter(Boolean);
+          }
+
+          // Do not drop a folder into itself or into its own subdirectories
+          const destClean = item.path.replace(/[\\/]+$/, '').toLowerCase();
+          const validSources = sources.filter((src) => {
+            const srcClean = src.replace(/[\\/]+$/, '').toLowerCase();
+            if (srcClean === destClean) return false;
+            if (destClean.startsWith(srcClean + '\\') || destClean.startsWith(srcClean + '/')) return false;
+            return true;
+          });
+
+          if (validSources.length > 0) {
+            window.dispatchEvent(
+              new CustomEvent('app:cross-pane-transfer', {
+                detail: {
+                  sources: validSources,
+                  destination: item.path,
+                  mode: dragEvent.ctrlKey ? 'COPY' : 'MOVE',
+                  sourcePane,
+                  destPane: this.paneId,
+                },
+              })
+            );
           }
         });
       }
@@ -561,28 +621,42 @@ export class VirtualizedFileList {
       this.container.classList.remove('drag-over-active');
 
       const raw = e.dataTransfer?.getData('application/afe-pane-transfer');
-      if (!raw) return;
+      let sources: string[] = [];
+      let sourcePane: PaneId | undefined = undefined;
 
-      try {
-        const payload = JSON.parse(raw);
-        if (payload.sources && payload.sources.length > 0 && payload.sourcePane !== this.paneId) {
-          const dest = appStore.getActiveTab(this.paneId).currentPath;
-          if (dest) {
+      if (raw) {
+        try {
+          const payload = JSON.parse(raw);
+          sources = payload.sources || [];
+          sourcePane = payload.sourcePane;
+        } catch (err) {
+          console.error('Failed to parse drag transfer payload:', err);
+        }
+      } else if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+        sources = Array.from(e.dataTransfer.files)
+          .map((f: any) => f.path)
+          .filter(Boolean);
+      }
+
+      if (sources.length > 0) {
+        const dest = appStore.getActiveTab(this.paneId).currentPath;
+        if (dest) {
+          // If moving within the exact same pane and folder, ignore unless copying
+          const isSamePane = sourcePane === this.paneId;
+          if (!isSamePane || e.ctrlKey) {
             window.dispatchEvent(
               new CustomEvent('app:cross-pane-transfer', {
                 detail: {
-                  sources: payload.sources,
+                  sources,
                   destination: dest,
                   mode: e.ctrlKey ? 'COPY' : 'MOVE',
-                  sourcePane: payload.sourcePane,
+                  sourcePane,
                   destPane: this.paneId,
                 },
               })
             );
           }
         }
-      } catch (err) {
-        console.error('Failed to parse drag transfer payload:', err);
       }
     });
   }
@@ -654,9 +728,17 @@ export class VirtualizedFileList {
         e.preventDefault();
         appStore.setSelection(items.map((i) => i.path), this.paneId);
       } else if (e.key === 'F2') {
-        const item = items[this.focusedIndex];
-        if (item) {
-          window.dispatchEvent(new CustomEvent('app:trigger-rename', { detail: { item } }));
+        const activeTab = appStore.getActiveTab(this.paneId);
+        let targetItem: FileItem | undefined;
+        if (activeTab.selectedPaths.size === 1) {
+          const selPath = Array.from(activeTab.selectedPaths)[0];
+          targetItem = items.find((i) => i.path.toLowerCase() === selPath.toLowerCase());
+        }
+        if (!targetItem) {
+          targetItem = items[this.focusedIndex];
+        }
+        if (targetItem) {
+          window.dispatchEvent(new CustomEvent('app:trigger-rename', { detail: { item: targetItem } }));
         }
       } else if (e.key === 'Delete') {
         const activeTab = appStore.getActiveTab(this.paneId);

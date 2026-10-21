@@ -1,5 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell, protocol, net } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs/promises';
+import { spawn } from 'child_process';
 import { pathToFileURL } from 'url';
 import { IPC_CHANNELS } from '../shared/ipc-contracts';
 import { DriveService } from './services/DriveService';
@@ -186,6 +188,182 @@ function registerIpcHandlers() {
 
   ipcMain.handle(IPC_CHANNELS.SHELL_SHOW_IN_FOLDER, async (_event, targetPath: string) => {
     shell.showItemInFolder(targetPath);
+  });
+
+  // External OS drag-out: drag files from app to Explorer/Chrome/Desktop etc.
+  // Uses ipcMain.on (synchronous) because webContents.startDrag must be called in the ondragstart handler.
+  ipcMain.on(IPC_CHANNELS.SHELL_START_DRAG, (event, filePaths: string[]) => {
+    if (!filePaths || filePaths.length === 0) return;
+    try {
+      const firstFile = filePaths[0];
+      const iconPath = path.resolve(__dirname, '../../assets/drag-icon.png');
+      if (filePaths.length === 1) {
+        event.sender.startDrag({
+          file: firstFile,
+          icon: iconPath,
+        });
+      } else {
+        // Multi-file: Electron accepts `files` array (Electron 12+), cast to bypass older typedefs
+        (event.sender as any).startDrag({
+          file: firstFile,
+          files: filePaths,
+          icon: iconPath,
+        });
+      }
+    } catch (err) {
+      console.error('[startExternalDrag] error:', err);
+    }
+  });
+
+  // Stat a single file (for preview header metadata)
+  ipcMain.handle(IPC_CHANNELS.SHELL_STAT_FILE, async (_event, filePath: string) => {
+    try {
+      const stat = await fs.stat(filePath);
+      return { sizeBytes: stat.size, modifiedMs: stat.mtimeMs };
+    } catch {
+      return null;
+    }
+  });
+
+  // Code Sandbox: Full text reading for code editor
+  ipcMain.handle(IPC_CHANNELS.FILE_READ_TEXT, async (_event, filePath: string) => {
+    try {
+      const content = await fs.readFile(filePath, 'utf-8');
+      const stat = await fs.stat(filePath);
+      return {
+        success: true,
+        content,
+        sizeBytes: stat.size,
+        modifiedMs: stat.mtimeMs,
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Code Sandbox: Save edited file
+  ipcMain.handle(IPC_CHANNELS.FILE_WRITE_TEXT, async (_event, filePath: string, content: string) => {
+    try {
+      await fs.writeFile(filePath, content, 'utf-8');
+      const stat = await fs.stat(filePath);
+      inspectorService.invalidate(filePath);
+      return {
+        success: true,
+        sizeBytes: stat.size,
+        modifiedMs: stat.mtimeMs,
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Code Sandbox: Execution & Debugging runner
+  ipcMain.handle(IPC_CHANNELS.CODE_RUN_SANDBOX, async (_event, { code, language, filePath }: { code: string; language: string; filePath?: string }) => {
+    const startTime = Date.now();
+    const workingDir = filePath ? path.dirname(filePath) : process.cwd();
+
+    return new Promise((resolve) => {
+      let cmd = '';
+      let args: string[] = [];
+
+      const langLower = (language || '').toLowerCase();
+      if (['javascript', 'js', 'typescript', 'ts', 'jsx', 'tsx', 'node'].includes(langLower)) {
+        if (filePath && !code) {
+          cmd = 'node';
+          args = [filePath];
+        } else {
+          cmd = 'node';
+          args = ['-e', code];
+        }
+      } else if (['python', 'py'].includes(langLower)) {
+        cmd = 'python';
+        if (filePath && !code) {
+          args = [filePath];
+        } else {
+          args = ['-c', code];
+        }
+      } else if (['powershell', 'ps1'].includes(langLower)) {
+        cmd = 'powershell';
+        args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', code];
+      } else if (['batch', 'bat', 'cmd'].includes(langLower)) {
+        cmd = 'cmd.exe';
+        args = ['/c', code];
+      } else {
+        cmd = 'node';
+        args = ['-e', code];
+      }
+
+      let stdout = '';
+      let stderr = '';
+      let proc: any;
+
+      try {
+        proc = spawn(cmd, args, {
+          cwd: workingDir,
+          shell: true,
+          env: { ...process.env, FORCE_COLOR: '0' },
+        });
+      } catch (err: any) {
+        return resolve({
+          success: false,
+          stdout: '',
+          stderr: `Failed to spawn process (${cmd}): ${err.message}`,
+          durationMs: Date.now() - startTime,
+          exitCode: 1,
+          error: err.message,
+        });
+      }
+
+      const timer = setTimeout(() => {
+        try {
+          proc.kill();
+        } catch {}
+        resolve({
+          success: false,
+          stdout,
+          stderr: stderr ? `${stderr}\n[Execution timed out after 10s]` : '[Execution timed out after 10s]',
+          durationMs: Date.now() - startTime,
+          exitCode: 124,
+        });
+      }, 10000);
+
+      proc.stdout?.on('data', (data: Buffer) => {
+        stdout += data.toString();
+        if (stdout.length > 50000) {
+          stdout = stdout.slice(0, 50000) + '\n[Output truncated...]';
+        }
+      });
+
+      proc.stderr?.on('data', (data: Buffer) => {
+        stderr += data.toString();
+        if (stderr.length > 50000) {
+          stderr = stderr.slice(0, 50000) + '\n[Errors truncated...]';
+        }
+      });
+
+      proc.on('error', (err: any) => {
+        clearTimeout(timer);
+        resolve({
+          success: false,
+          stdout,
+          stderr: stderr ? `${stderr}\n${err.message}` : err.message,
+          durationMs: Date.now() - startTime,
+          exitCode: 1,
+          error: err.message,
+        });
+      });
+
+      proc.on('close', (code: number) => {
+        clearTimeout(timer);
+        resolve({
+          success: code === 0,
+          stdout,
+          stderr,
+          durationMs: Date.now() - startTime,
+          exitCode: code ?? 0,
+        });
+      });
+    });
   });
 }
 

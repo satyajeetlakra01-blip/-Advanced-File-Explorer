@@ -65,11 +65,12 @@ describe('Phase 8 Performance Benchmarks & Non-Functional Verification (NFR-001 
     }
 
     const start = performance.now();
+    const collator = new Intl.Collator(undefined, { numeric: true });
     // Sort by name ascending with folder pinning
     items.sort((a, b) => {
       if (a.isDirectory && !b.isDirectory) return -1;
       if (!a.isDirectory && b.isDirectory) return 1;
-      return a.name.localeCompare(b.name, undefined, { numeric: true });
+      return collator.compare(a.name, b.name);
     });
 
     // Simulate virtual window slice of 30 visible items

@@ -53,6 +53,9 @@ export class MacGlassPreview {
   private panStartX = 0;
   private panStartY = 0;
 
+  // Navigation slide direction
+  private navDirection: 'next' | 'prev' = 'next';
+
   constructor() {
     // Listen for file preview requests
     window.addEventListener('app:preview-file', (e: Event) => {
@@ -117,10 +120,79 @@ export class MacGlassPreview {
 
     const nextItem = items[nextIndex];
     if (nextItem) {
+      this.navDirection = direction;
       // Keep selection in sync with folder view
       appStore.setSelection([nextItem.path]);
-      this.open(nextItem.path);
+      this.openWithSlide(nextItem.path);
     }
+  }
+
+  /**
+   * Navigate to a new image/video with a smooth slide animation.
+   * Current content slides out, new content slides in from the correct edge.
+   */
+  private async openWithSlide(path: string) {
+    const name = path.split(/[\\/]/).pop() || path;
+    const type = detectType(name);
+
+    // If we already have an overlay and same type (image), animate slide
+    if (this.overlay && type === 'image') {
+      const body = this.overlay.querySelector('#mgp-body') as HTMLElement;
+      const imageContainer = body?.querySelector('.mgp-image-container') as HTMLElement;
+
+      if (imageContainer) {
+        // Determine slide direction classes
+        const exitClass = this.navDirection === 'next' ? 'slide-exit-left' : 'slide-exit-right';
+        const enterClass = this.navDirection === 'next' ? 'slide-enter-right' : 'slide-enter-left';
+
+        // Pre-load the new image
+        const mediaUrl = `afe-media://load?path=${encodeURIComponent(path)}`;
+        const preloadImg = new Image();
+
+        const doSlide = () => {
+          // Create new container to slide in
+          const newContainer = document.createElement('div');
+          newContainer.className = `mgp-image-container ${enterClass}`;
+          newContainer.innerHTML = `
+            <div class="mgp-image-wrapper" id="mgp-img-wrapper">
+              <img class="mgp-image loaded" src="${mediaUrl}" alt="Preview" draggable="false" />
+            </div>`;
+
+          // Slide old out
+          imageContainer.classList.add(exitClass);
+
+          // Insert new
+          body.insertBefore(newContainer, imageContainer);
+
+          // Trigger reflow then animate in
+          requestAnimationFrame(() => {
+            newContainer.classList.remove(enterClass);
+            newContainer.classList.add('slide-enter-active');
+          });
+
+          // After animation, clean up
+          setTimeout(() => {
+            imageContainer.remove();
+            newContainer.classList.remove('slide-enter-active');
+            this.resetZoom();
+            this.attachImageZoomPan(this.overlay!);
+          }, 320);
+        };
+
+        this.currentFile = { path, name };
+        // Update filename in header
+        const filenameEl = this.overlay.querySelector('.mgp-filename');
+        if (filenameEl) filenameEl.textContent = name;
+
+        preloadImg.onload = doSlide;
+        preloadImg.onerror = doSlide;
+        preloadImg.src = mediaUrl;
+        return;
+      }
+    }
+
+    // Fallback: full re-render
+    this.open(path);
   }
 
   private resetZoom() {
@@ -510,26 +582,35 @@ export class MacGlassPreview {
       }
     });
 
-    // Auto-hide play/pause button and controls while playing; reveal immediately on mouse hover / movement
+    // Auto-hide controls: show on any mouse movement inside playerWrap.
+    // Hide only after 1 second of NO movement (not on mouseleave).
+    // When video is paused, always keep controls visible.
     let hideTimer: any = null;
-    const showControlsTemporarily = () => {
+
+    const showControls = () => {
       playerWrap?.classList.add('user-active');
+    };
+
+    const scheduleHide = () => {
       if (hideTimer) clearTimeout(hideTimer);
       if (!video.paused && !video.ended) {
         hideTimer = setTimeout(() => {
           playerWrap?.classList.remove('user-active');
-        }, 1800);
+        }, 1000);
       }
     };
 
+    const showControlsTemporarily = () => {
+      showControls();
+      scheduleHide();
+    };
+
+    // Show controls whenever the cursor moves anywhere in the player box
     playerWrap?.addEventListener('mousemove', showControlsTemporarily);
+    // Show controls on enter
     playerWrap?.addEventListener('mouseenter', showControlsTemporarily);
-    playerWrap?.addEventListener('mouseleave', () => {
-      if (!video.paused && !video.ended) {
-        if (hideTimer) clearTimeout(hideTimer);
-        playerWrap?.classList.remove('user-active');
-      }
-    });
+    // DO NOT hide on mouseleave — let the 1-second timer handle it
+    // (Removed the mouseleave instant-hide listener per user request)
 
     // Space bar toggles play/pause on video
     const handleVideoKey = (e: KeyboardEvent) => {

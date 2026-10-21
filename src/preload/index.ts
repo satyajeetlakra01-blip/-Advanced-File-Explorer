@@ -78,6 +78,12 @@ const api: IpcApi = {
 
   openPath: (path: string) => ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_PATH, path),
   showInFolder: (path: string) => ipcRenderer.invoke(IPC_CHANNELS.SHELL_SHOW_IN_FOLDER, path),
+
+  readTextFile: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE_READ_TEXT, filePath),
+  writeTextFile: (filePath: string, content: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE_WRITE_TEXT, filePath, content),
+  runCodeSandbox: (params: { code: string; language: string; filePath?: string }) => ipcRenderer.invoke(IPC_CHANNELS.CODE_RUN_SANDBOX, params),
+  startExternalDrag: (paths: string[]) => ipcRenderer.send(IPC_CHANNELS.SHELL_START_DRAG, paths),
+  statFile: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.SHELL_STAT_FILE, filePath),
 };
 
 contextBridge.exposeInMainWorld('electronApi', api);

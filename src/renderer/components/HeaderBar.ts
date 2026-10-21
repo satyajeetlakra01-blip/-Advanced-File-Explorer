@@ -220,6 +220,58 @@ export class HeaderBar {
         window.dispatchEvent(new CustomEvent('app:navigate', { detail: { path: targetPath } }));
       });
 
+      // Breadcrumb drop target for multi-file dragging
+      segment.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
+        segment.classList.add('breadcrumb-drop-target');
+      });
+
+      segment.addEventListener('dragleave', () => {
+        segment.classList.remove('breadcrumb-drop-target');
+      });
+
+      segment.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        segment.classList.remove('breadcrumb-drop-target');
+
+        const raw = e.dataTransfer?.getData('application/afe-pane-transfer');
+        let sources: string[] = [];
+        let sourcePane = appStore.getState().activePaneId;
+
+        if (raw) {
+          try {
+            const p = JSON.parse(raw);
+            sources = p.sources || [];
+            sourcePane = p.sourcePane || sourcePane;
+          } catch {}
+        } else if (e.dataTransfer?.files) {
+          sources = Array.from(e.dataTransfer.files).map((f: any) => f.path).filter(Boolean);
+        }
+
+        const validSources = sources.filter((src) => {
+          const s = src.replace(/[\\/]+$/, '').toLowerCase();
+          const d = targetPath.replace(/[\\/]+$/, '').toLowerCase();
+          return s !== d && !d.startsWith(s + '\\') && !d.startsWith(s + '/');
+        });
+
+        if (validSources.length > 0) {
+          window.dispatchEvent(
+            new CustomEvent('app:cross-pane-transfer', {
+              detail: {
+                sources: validSources,
+                destination: targetPath,
+                mode: e.ctrlKey ? 'COPY' : 'MOVE',
+                sourcePane,
+                destPane: sourcePane,
+              },
+            })
+          );
+        }
+      });
+
       list.appendChild(segment);
 
       if (index < parts.length - 1) {
@@ -432,11 +484,17 @@ export class HeaderBar {
 
     // Rename
     this.container.querySelector('#tb-btn-rename')?.addEventListener('click', () => {
-      if (selectedPaths.length === 1) {
-        const item = appStore.getActiveTab().items.find((i) => i.path === selectedPaths[0]);
+      const activeTab = appStore.getActiveTab();
+      const currentSelected = Array.from(activeTab.selectedPaths);
+      if (currentSelected.length === 1) {
+        const item = activeTab.items.find((i) => i.path.toLowerCase() === currentSelected[0].toLowerCase());
         if (item) {
           window.dispatchEvent(new CustomEvent('app:trigger-rename', { detail: { item } }));
+        } else {
+          window.dispatchEvent(new CustomEvent('app:trigger-rename', { detail: { path: currentSelected[0] } }));
         }
+      } else {
+        window.dispatchEvent(new CustomEvent('app:trigger-rename'));
       }
     });
 

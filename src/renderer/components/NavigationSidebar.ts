@@ -77,11 +77,73 @@ export class NavigationSidebar {
   }
 
   private attachEvents() {
-    this.container.querySelectorAll('.sidebar-item').forEach((item) => {
+    this.container.querySelectorAll<HTMLElement>('.sidebar-item').forEach((item) => {
+      const targetPath = item.getAttribute('data-path');
+      if (!targetPath) return;
+
       item.addEventListener('click', () => {
-        const targetPath = item.getAttribute('data-path');
-        if (targetPath) {
-          window.dispatchEvent(new CustomEvent('app:navigate', { detail: { path: targetPath } }));
+        window.dispatchEvent(new CustomEvent('app:navigate', { detail: { path: targetPath } }));
+      });
+
+      // Drag and drop target support on sidebar items
+      item.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer) {
+          e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
+        }
+        item.classList.add('sidebar-drop-target');
+      });
+
+      item.addEventListener('dragleave', (e) => {
+        const related = e.relatedTarget as HTMLElement | null;
+        if (!item.contains(related)) {
+          item.classList.remove('sidebar-drop-target');
+        }
+      });
+
+      item.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        item.classList.remove('sidebar-drop-target');
+
+        const raw = e.dataTransfer?.getData('application/afe-pane-transfer');
+        let sources: string[] = [];
+        let sourcePane: any = appStore.getState().activePaneId;
+
+        if (raw) {
+          try {
+            const payload = JSON.parse(raw);
+            sources = payload.sources || [];
+            sourcePane = payload.sourcePane || sourcePane;
+          } catch (err) {
+            console.error('Failed to parse sidebar drop payload:', err);
+          }
+        } else if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+          sources = Array.from(e.dataTransfer.files)
+            .map((f: any) => f.path)
+            .filter(Boolean);
+        }
+
+        // Do not drop items into themselves
+        const validSources = sources.filter((src) => {
+          const s = src.replace(/[\\/]+$/, '').toLowerCase();
+          const d = targetPath.replace(/[\\/]+$/, '').toLowerCase();
+          return s !== d && !d.startsWith(s + '\\') && !d.startsWith(s + '/');
+        });
+
+        if (validSources.length > 0) {
+          window.dispatchEvent(
+            new CustomEvent('app:cross-pane-transfer', {
+              detail: {
+                sources: validSources,
+                destination: targetPath,
+                mode: e.ctrlKey ? 'COPY' : 'MOVE',
+                sourcePane,
+                destPane: sourcePane,
+              },
+            })
+          );
         }
       });
     });

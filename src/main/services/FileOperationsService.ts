@@ -30,16 +30,38 @@ export class FileOperationsService {
     oldPath: string,
     newName: string
   ): Promise<{ success: boolean; newPath?: string; error?: string }> {
-    const validation = this.validateFilename(newName);
+    const trimmed = (newName || '').trim();
+    const validation = this.validateFilename(trimmed);
     if (!validation.valid) {
       return { success: false, error: validation.reason };
     }
 
-    const dir = path.dirname(oldPath);
-    const newPath = path.join(dir, newName);
+    const cleanOldPath = path.resolve(oldPath);
+    const dir = path.dirname(cleanOldPath);
+    const newPath = path.join(dir, trimmed);
+
+    if (cleanOldPath === newPath) {
+      return { success: true, newPath };
+    }
 
     try {
-      await fs.rename(oldPath, newPath);
+      // Case-only rename on Windows (e.g. file.txt -> FILE.txt)
+      if (cleanOldPath.toLowerCase() === newPath.toLowerCase()) {
+        const tempPath = path.join(dir, `__afe_tmp_${Date.now()}_${trimmed}`);
+        await fs.rename(cleanOldPath, tempPath);
+        await fs.rename(tempPath, newPath);
+        return { success: true, newPath };
+      }
+
+      // Check if target name already exists in directory
+      try {
+        await fs.access(newPath);
+        return { success: false, error: `An item named "${trimmed}" already exists in this directory.` };
+      } catch {
+        // Destination does not exist, good to rename
+      }
+
+      await fs.rename(cleanOldPath, newPath);
       return { success: true, newPath };
     } catch (err: any) {
       return { success: false, error: err.message };
@@ -75,17 +97,24 @@ export class FileOperationsService {
 
   async checkCollisions(sources: string[], destination: string): Promise<FileCollision[]> {
     const collisions: FileCollision[] = [];
+    const cleanDest = path.resolve(destination);
 
     for (const src of sources) {
-      const fileName = path.basename(src);
-      const destPath = path.join(destination, fileName);
+      const cleanSrc = path.resolve(src);
+      const fileName = path.basename(cleanSrc);
+      const destPath = path.join(cleanDest, fileName);
+
+      // Same file in same folder is not an overwrite collision unless copying
+      if (cleanSrc.toLowerCase() === destPath.toLowerCase()) {
+        continue;
+      }
 
       try {
         const destStats = await fs.stat(destPath);
-        const srcStats = await fs.stat(src);
+        const srcStats = await fs.stat(cleanSrc);
 
         collisions.push({
-          sourcePath: src,
+          sourcePath: cleanSrc,
           destinationPath: destPath,
           fileName,
           sourceSizeBytes: srcStats.size,
@@ -145,6 +174,7 @@ export class FileOperationsService {
     let transferred = 0;
     let totalBytes = 0;
     let transferredBytes = 0;
+    const cleanDest = path.resolve(destination);
 
     // Calculate total bytes
     for (const src of sources) {
@@ -163,15 +193,28 @@ export class FileOperationsService {
           return { success: false, transferred, cancelled: true };
         }
 
-        const src = sources[i];
+        const src = path.resolve(sources[i]);
         const fileName = path.basename(src);
-        let destPath = path.join(destination, fileName);
+        let destPath = path.join(cleanDest, fileName);
+
+        // Same file in same folder
+        if (src.toLowerCase() === destPath.toLowerCase()) {
+          if (mode === 'MOVE') {
+            // Moving onto itself is a no-op
+            transferred++;
+            continue;
+          }
+          // COPY to same folder creates auto duplicate
+          if (!resolutionMap[fileName]) {
+            destPath = await this.getUniqueAutoName(cleanDest, fileName);
+          }
+        }
 
         const resolution = resolutionMap[fileName];
         if (resolution === 'SKIP') {
           continue;
         } else if (resolution === 'AUTO_RENAME') {
-          destPath = await this.getUniqueAutoName(destination, fileName);
+          destPath = await this.getUniqueAutoName(cleanDest, fileName);
         } else if (resolution === 'OVERWRITE') {
           try {
             const s = await fs.stat(destPath);
@@ -205,13 +248,31 @@ export class FileOperationsService {
           if (mode === 'COPY') {
             await fs.cp(src, destPath, { recursive: true });
           } else {
-            await fs.rename(src, destPath);
+            try {
+              await fs.rename(src, destPath);
+            } catch (err: any) {
+              if (err.code === 'EXDEV') {
+                await fs.cp(src, destPath, { recursive: true });
+                await fs.rm(src, { recursive: true, force: true });
+              } else {
+                throw err;
+              }
+            }
           }
         } else {
           if (mode === 'COPY') {
             await fs.copyFile(src, destPath);
           } else {
-            await fs.rename(src, destPath);
+            try {
+              await fs.rename(src, destPath);
+            } catch (err: any) {
+              if (err.code === 'EXDEV') {
+                await fs.copyFile(src, destPath);
+                await fs.unlink(src);
+              } else {
+                throw err;
+              }
+            }
           }
         }
 

@@ -53,4 +53,23 @@ describe('Safe File Operations Service', () => {
       expect(ops.cancelTransfer(opId)).toBe(false);
     });
   });
+
+  describe('Rename and Collisions logic', () => {
+    it('rejects invalid names in renameItem', async () => {
+      const res = await ops.renameItem('C:\\Test\\doc.txt', 'invalid/name.txt');
+      expect(res.success).toBe(false);
+      expect(res.error).toBeDefined();
+    });
+
+    it('rejects empty or whitespace-only names', async () => {
+      const res = await ops.renameItem('C:\\Test\\doc.txt', '   ');
+      expect(res.success).toBe(false);
+      expect(res.error).toContain('cannot be empty');
+    });
+
+    it('returns success when old and new names are identical', async () => {
+      const res = await ops.renameItem('C:\\Test\\doc.txt', 'doc.txt');
+      expect(res.success).toBe(true);
+    });
+  });
 });
