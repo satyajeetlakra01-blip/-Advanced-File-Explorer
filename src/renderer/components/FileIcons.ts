@@ -47,7 +47,7 @@ export class FileIcons {
     }
 
     const ext = (item.extension || '').toLowerCase();
-    return this.getCodeOrDocSymbol(ext, size);
+    return this.getCodeOrDocSymbol(ext, size, item.name);
   }
 
   /**
@@ -71,7 +71,7 @@ export class FileIcons {
             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
           />
           <div class="card-thumb-fallback" style="display: none; width: 100%; height: 100%; align-items: center; justify-content: center;">
-            ${this.getCodeOrDocSymbol(item.extension || '', Math.round(previewHeight * 0.55))}
+            ${this.getCodeOrDocSymbol(item.extension || '', Math.round(previewHeight * 0.55), item.name)}
           </div>
         </div>
       `;
@@ -91,7 +91,7 @@ export class FileIcons {
             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
           ></video>
           <div class="card-thumb-fallback" style="display: none; width: 100%; height: 100%; align-items: center; justify-content: center;">
-            ${this.getCodeOrDocSymbol('video', Math.round(previewHeight * 0.55))}
+            ${this.getCodeOrDocSymbol('video', Math.round(previewHeight * 0.55), item.name)}
           </div>
           <div class="video-pill-badge">
             <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -128,7 +128,7 @@ export class FileIcons {
     const symbolSize = Math.max(34, Math.round(cardWidth * 0.44));
     return `
       <div class="card-thumb-container card-symbol-container" style="height: ${previewHeight}px;">
-        ${this.getCodeOrDocSymbol((item.extension || '').toLowerCase(), symbolSize)}
+        ${this.getCodeOrDocSymbol((item.extension || '').toLowerCase(), symbolSize, item.name)}
       </div>
     `;
   }
@@ -136,7 +136,167 @@ export class FileIcons {
   /**
    * Generates developer symbols with distinct colors and glyphs (Java, C++, C#, Python, TS, etc.)
    */
-  private static getCodeOrDocSymbol(ext: string, size: number): string {
+  private static getCodeOrDocSymbol(ext: string, size: number, fileName = ''): string {
+    const lowerName = fileName.toLowerCase();
+
+    // Specific desktop application shortcuts & special files recognition
+    if (ext === 'lnk' || ext === 'url' || ext === 'exe' || ext === 'appref-ms') {
+      if (lowerName.includes('code') || lowerName.includes('visual studio')) {
+        return `
+          <div class="dev-badge dev-badge-vscode" style="width:${size}px; height:${size}px;" title="VS Code">
+            <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+              <rect width="32" height="32" rx="7" fill="#007ACC" />
+              <path d="M23.5 6.2L18.2 11.2L14.2 8.1L6 14.5L14.2 20.9L18.2 17.8L23.5 22.8C24.3 23.4 25.5 22.8 25.5 21.8V7.2C25.5 6.2 24.3 5.6 23.5 6.2Z" fill="#FFFFFF" opacity="0.95"/>
+            </svg>
+          </div>
+        `;
+      }
+      if (lowerName.includes('blender')) {
+        return `
+          <div class="dev-badge dev-badge-blender" style="width:${size}px; height:${size}px;" title="Blender 3D">
+            <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+              <rect width="32" height="32" rx="7" fill="#EA7600" />
+              <circle cx="16" cy="18" r="5" fill="#225796" stroke="#FFFFFF" stroke-width="1.8"/>
+              <circle cx="16" cy="18" r="2.2" fill="#FFFFFF" />
+              <path d="M16 11V7M11 14L8 11M21 14L24 11" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+        `;
+      }
+      if (lowerName.includes('premiere')) {
+        return `
+          <div class="dev-badge dev-badge-premiere" style="width:${size}px; height:${size}px;" title="Adobe Premiere Pro">
+            <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+              <rect width="32" height="32" rx="7" fill="#00005B" />
+              <text x="8" y="22" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="14" fill="#9999FF">Pr</text>
+            </svg>
+          </div>
+        `;
+      }
+      if (lowerName.includes('photoshop')) {
+        return `
+          <div class="dev-badge dev-badge-photoshop" style="width:${size}px; height:${size}px;" title="Adobe Photoshop">
+            <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+              <rect width="32" height="32" rx="7" fill="#001E36" />
+              <text x="8" y="22" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="14" fill="#31A8FF">Ps</text>
+            </svg>
+          </div>
+        `;
+      }
+      if (lowerName.includes('adobe') || lowerName.includes('express')) {
+        return `
+          <div class="dev-badge dev-badge-adobe" style="width:${size}px; height:${size}px;" title="Adobe Application">
+            <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+              <rect width="32" height="32" rx="7" fill="#EB1000" />
+              <path d="M9 7L13 22H11L9.5 17H7.5M19 7L23 22H21L19.5 17H17.5M16 14L13.5 22H18.5L16 14Z" fill="#FFFFFF"/>
+            </svg>
+          </div>
+        `;
+      }
+      if (lowerName.includes('edge') || lowerName.includes('chrome') || lowerName.includes('browser')) {
+        return `
+          <div class="dev-badge dev-badge-browser" style="width:${size}px; height:${size}px;" title="Web Browser">
+            <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+              <rect width="32" height="32" rx="7" fill="#0284C7" />
+              <circle cx="16" cy="16" r="8" stroke="#FFFFFF" stroke-width="2"/>
+              <ellipse cx="16" cy="16" rx="4" ry="8" stroke="#FFFFFF" stroke-width="1.8"/>
+              <path d="M8 16H24" stroke="#FFFFFF" stroke-width="1.8"/>
+            </svg>
+          </div>
+        `;
+      }
+      if (lowerName.includes('gemini') || lowerName.includes('ai') || lowerName.includes('claude') || lowerName.includes('jarvis')) {
+        return `
+          <div class="dev-badge dev-badge-ai" style="width:${size}px; height:${size}px;" title="AI Assistant">
+            <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+              <rect width="32" height="32" rx="7" fill="url(#ai-app-grad)" />
+              <path d="M16 6C16 11.5 20.5 16 26 16C20.5 16 16 20.5 16 26C16 20.5 11.5 16 6 16C11.5 16 16 11.5 16 6Z" fill="#FFFFFF"/>
+              <defs>
+                <linearGradient id="ai-app-grad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#4F46E5" />
+                  <stop offset="0.5" stop-color="#7C3AED" />
+                  <stop offset="1" stop-color="#DB2777" />
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+        `;
+      }
+      if (lowerName.includes('unreal')) {
+        return `
+          <div class="dev-badge dev-badge-unreal" style="width:${size}px; height:${size}px;" title="Unreal Engine">
+            <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+              <rect width="32" height="32" rx="7" fill="#18181B" stroke="rgba(255,255,255,0.2)"/>
+              <circle cx="16" cy="16" r="9" stroke="#FFFFFF" stroke-width="2"/>
+              <text x="10.5" y="21.5" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="14" fill="#FFFFFF">U</text>
+            </svg>
+          </div>
+        `;
+      }
+      if (lowerName.includes('capcut') || lowerName.includes('canvid') || lowerName.includes('obs')) {
+        return `
+          <div class="dev-badge dev-badge-videoapp" style="width:${size}px; height:${size}px;" title="Media Studio">
+            <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+              <rect width="32" height="32" rx="7" fill="#0D9488" />
+              <path d="M10 11L18 16L10 21V11Z" fill="#FFFFFF"/>
+              <rect x="20" y="11" width="3" height="10" rx="1" fill="#FFFFFF"/>
+            </svg>
+          </div>
+        `;
+      }
+      if (lowerName.includes('bluej') || lowerName.includes('eclipse') || lowerName.includes('idea')) {
+        return `
+          <div class="dev-badge dev-badge-ide" style="width:${size}px; height:${size}px;" title="IDE / Compiler">
+            <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+              <rect width="32" height="32" rx="7" fill="#2563EB" />
+              <path d="M10 10L6 16L10 22M22 10L26 16L22 22" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round"/>
+              <path d="M18 8L14 24" stroke="#FBBF24" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+        `;
+      }
+      if (lowerName.includes('game') || lowerName.includes('epic') || lowerName.includes('minecraft') || lowerName.includes('bluestack')) {
+        return `
+          <div class="dev-badge dev-badge-game" style="width:${size}px; height:${size}px;" title="Game / Launcher">
+            <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+              <rect width="32" height="32" rx="7" fill="#10B981" />
+              <path d="M8 12C8 10.5 9 9 11 9H21C23 9 24 10.5 24 12V18C24 20 22.5 22 20.5 22L18 19H14L11.5 22C9.5 22 8 20 8 18V12Z" stroke="#FFFFFF" stroke-width="1.8" fill="rgba(255,255,255,0.15)"/>
+              <circle cx="12" cy="14" r="1.5" fill="#FFFFFF"/>
+              <circle cx="20" cy="14" r="1.5" fill="#FFFFFF"/>
+            </svg>
+          </div>
+        `;
+      }
+      // General Desktop Application Shortcut
+      return `
+        <div class="dev-badge dev-badge-shortcut" style="width:${size}px; height:${size}px;" title="Application Shortcut">
+          <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+            <rect width="32" height="32" rx="7" fill="url(#app-shortcut-grad)" />
+            <path d="M10 14L16 8L22 14" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M16 8V21M11 24H21" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round"/>
+            <defs>
+              <linearGradient id="app-shortcut-grad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#3B82F6" />
+                <stop offset="1" stop-color="#1D4ED8" />
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+      `;
+    }
+
+    if (lowerName === 'desktop.ini' || ext === 'ini' || ext === 'cfg' || ext === 'conf') {
+      return `
+        <div class="dev-badge dev-badge-ini" style="width:${size}px; height:${size}px;" title="System Configuration">
+          <svg viewBox="0 0 32 32" width="100%" height="100%" fill="none">
+            <rect width="32" height="32" rx="7" fill="#475569" />
+            <circle cx="16" cy="16" r="3" stroke="#FFFFFF" stroke-width="1.8"/>
+            <path d="M16 8V11M16 21V24M8 16H11M21 16H24M10.5 10.5L12.5 12.5M19.5 19.5L21.5 21.5M10.5 21.5L12.5 19.5M19.5 12.5L21.5 10.5" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </div>
+      `;
+    }
+
     switch (ext) {
       // --- Java ---
       case 'java':
