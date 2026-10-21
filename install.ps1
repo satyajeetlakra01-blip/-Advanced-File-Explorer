@@ -78,8 +78,10 @@ if ($hasRelease) {
     $appDir = $installDir + '\app'
 
     if (Test-Path ($appDir + '\.git')) {
-        Write-Host '    Repo already cloned. Pulling latest...' -ForegroundColor Gray
-        & git -C $appDir pull
+        Write-Host '    Repo already cloned. Pulling latest cleanly...' -ForegroundColor Gray
+        & git -C $appDir fetch origin
+        & git -C $appDir reset --hard origin/main
+        & git -C $appDir clean -fd
     } else {
         if (Test-Path $appDir) { Remove-Item $appDir -Recurse -Force }
         & git clone $cloneUrl $appDir
