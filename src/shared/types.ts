@@ -71,6 +71,7 @@ export interface DirectoryListing {
 }
 
 export interface FolderStats {
+  scanId?: string;
   path: string;
   directFiles: number;
   directFolders: number;

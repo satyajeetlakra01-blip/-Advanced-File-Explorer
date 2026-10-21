@@ -244,6 +244,21 @@ async function bootstrap() {
     }
   });
 
+  // Global dragleave: clear hover drop targets if drag exits the application window (e.g. into Chrome/WhatsApp/Desktop)
+  window.addEventListener('dragleave', (e: DragEvent) => {
+    if (
+      e.clientX <= 0 ||
+      e.clientY <= 0 ||
+      e.clientX >= window.innerWidth ||
+      e.clientY >= window.innerHeight ||
+      !e.relatedTarget
+    ) {
+      appStore.setHoveredDropTarget(null);
+      document.querySelectorAll('.folder-drop-target').forEach((t) => t.classList.remove('folder-drop-target'));
+      document.querySelectorAll('.drag-over-active').forEach((t) => t.classList.remove('drag-over-active'));
+    }
+  });
+
   // Cross-Pane File Transfers (Drag & Drop or Shortcut)
   window.addEventListener('app:cross-pane-transfer', async (e: any) => {
     const { sources, destination, mode, sourcePane, destPane } = e.detail;

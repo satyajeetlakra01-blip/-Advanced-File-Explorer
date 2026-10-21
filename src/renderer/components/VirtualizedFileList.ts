@@ -400,8 +400,24 @@ export class VirtualizedFileList {
         }
       });
 
-      el.addEventListener('dragend', () => {
-        appStore.setActiveDrag(null);
+      // When dragging ends: if dropped onto an internal target, execute the drop!
+      el.addEventListener('dragend', (e) => {
+        const dragEvent = e as DragEvent;
+        const isOutside =
+          dragEvent.clientX <= 0 ||
+          dragEvent.clientY <= 0 ||
+          dragEvent.clientX >= window.innerWidth ||
+          dragEvent.clientY >= window.innerHeight;
+
+        const hovered = isOutside ? null : appStore.getHoveredDropTarget();
+        if (hovered && hovered.path) {
+          this.executeInternalDrop(hovered.path, hovered.paneId || this.paneId, dragEvent.ctrlKey);
+        } else {
+          appStore.setActiveDrag(null);
+          appStore.setHoveredDropTarget(null);
+          document.querySelectorAll('.folder-drop-target').forEach((t) => t.classList.remove('folder-drop-target'));
+          document.querySelectorAll('.drag-over-active').forEach((t) => t.classList.remove('drag-over-active'));
+        }
       });
 
       // Drag target: Allow dropping files directly into collapsed folder items!
@@ -414,6 +430,11 @@ export class VirtualizedFileList {
             dragEvent.dataTransfer.dropEffect = dragEvent.ctrlKey ? 'copy' : 'move';
           }
           el.classList.add('folder-drop-target');
+          appStore.setHoveredDropTarget({
+            type: 'folder',
+            path: item.path,
+            paneId: this.paneId,
+          });
         });
 
         el.addEventListener('dragleave', (e) => {
@@ -421,6 +442,18 @@ export class VirtualizedFileList {
           const related = dragEvent.relatedTarget as HTMLElement | null;
           if (!el.contains(related)) {
             el.classList.remove('folder-drop-target');
+            if (appStore.getHoveredDropTarget()?.path === item.path) {
+              const activePath = appStore.getActiveTab(this.paneId).currentPath;
+              if (activePath) {
+                appStore.setHoveredDropTarget({
+                  type: 'pane',
+                  path: activePath,
+                  paneId: this.paneId,
+                });
+              } else {
+                appStore.setHoveredDropTarget(null);
+              }
+            }
           }
         });
 
@@ -430,31 +463,9 @@ export class VirtualizedFileList {
           dragEvent.stopPropagation();
           el.classList.remove('folder-drop-target');
 
-          let sources: string[] = [];
-          let sourcePane = this.paneId;
-
-          // 1. Check in-memory active drag state
-          const activeDrag = appStore.getActiveDrag();
-          if (activeDrag && activeDrag.sources?.length > 0) {
-            sources = [...activeDrag.sources];
-            sourcePane = activeDrag.sourcePane;
-          }
-
-          // 2. Check HTML5 payload
-          if (sources.length === 0) {
-            const raw = dragEvent.dataTransfer?.getData('application/afe-pane-transfer');
-            if (raw) {
-              try {
-                const payload = JSON.parse(raw);
-                sources = payload.sources || [];
-                sourcePane = payload.sourcePane || this.paneId;
-              } catch (err) {}
-            }
-          }
-
-          // 3. Check dropped files (e.g. from desktop or external explorer)
-          if (sources.length === 0 && dragEvent.dataTransfer?.files && dragEvent.dataTransfer.files.length > 0) {
-            sources = Array.from(dragEvent.dataTransfer.files)
+          let fallbackSources: string[] = [];
+          if (dragEvent.dataTransfer?.files && dragEvent.dataTransfer.files.length > 0) {
+            fallbackSources = Array.from(dragEvent.dataTransfer.files)
               .map((f: any) => {
                 try {
                   return window.electronApi.getPathForFile?.(f) || f.path || '';
@@ -465,30 +476,7 @@ export class VirtualizedFileList {
               .filter(Boolean);
           }
 
-          appStore.setActiveDrag(null);
-
-          // Do not drop a folder into itself or into its own subdirectories
-          const destClean = item.path.replace(/[\\/]+$/, '').toLowerCase();
-          const validSources = sources.filter((src) => {
-            const srcClean = src.replace(/[\\/]+$/, '').toLowerCase();
-            if (srcClean === destClean) return false;
-            if (destClean.startsWith(srcClean + '\\') || destClean.startsWith(srcClean + '/')) return false;
-            return true;
-          });
-
-          if (validSources.length > 0) {
-            window.dispatchEvent(
-              new CustomEvent('app:cross-pane-transfer', {
-                detail: {
-                  sources: validSources,
-                  destination: item.path,
-                  mode: dragEvent.ctrlKey ? 'COPY' : 'MOVE',
-                  sourcePane,
-                  destPane: this.paneId,
-                },
-              })
-            );
-          }
+          this.executeInternalDrop(item.path, this.paneId, dragEvent.ctrlKey, fallbackSources);
         });
       }
     });
@@ -611,43 +599,41 @@ export class VirtualizedFileList {
         e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
       }
       this.container.classList.add('drag-over-active');
+      const activePath = appStore.getActiveTab(this.paneId).currentPath;
+      if (activePath) {
+        const currentTarget = appStore.getHoveredDropTarget();
+        if (!currentTarget || currentTarget.type !== 'folder') {
+          appStore.setHoveredDropTarget({
+            type: 'pane',
+            path: activePath,
+            paneId: this.paneId,
+          });
+        }
+      }
     });
 
     this.container.addEventListener('dragleave', (e) => {
-      if ((e.relatedTarget as HTMLElement)?.closest(`.explorer-pane-${this.paneId}`) === null) {
+      const related = e.relatedTarget as HTMLElement | null;
+      if (!this.container.contains(related)) {
         this.container.classList.remove('drag-over-active');
+        const currentTarget = appStore.getHoveredDropTarget();
+        if (currentTarget && currentTarget.type === 'pane' && currentTarget.paneId === this.paneId) {
+          appStore.setHoveredDropTarget(null);
+        }
       }
     });
 
     this.container.addEventListener('drop', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       this.container.classList.remove('drag-over-active');
 
-      let sources: string[] = [];
-      let sourcePane: PaneId | undefined = undefined;
+      const dest = appStore.getActiveTab(this.paneId).currentPath;
+      if (!dest) return;
 
-      // 1. Check in-memory active drag state
-      const activeDrag = appStore.getActiveDrag();
-      if (activeDrag && activeDrag.sources?.length > 0) {
-        sources = [...activeDrag.sources];
-        sourcePane = activeDrag.sourcePane;
-      }
-
-      // 2. Check HTML5 payload
-      if (sources.length === 0) {
-        const raw = e.dataTransfer?.getData('application/afe-pane-transfer');
-        if (raw) {
-          try {
-            const payload = JSON.parse(raw);
-            sources = payload.sources || [];
-            sourcePane = payload.sourcePane;
-          } catch (err) {}
-        }
-      }
-
-      // 3. Check dropped files (e.g. from desktop or external explorer)
-      if (sources.length === 0 && e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-        sources = Array.from(e.dataTransfer.files)
+      let fallbackSources: string[] = [];
+      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+        fallbackSources = Array.from(e.dataTransfer.files)
           .map((f: any) => {
             try {
               return window.electronApi.getPathForFile?.(f) || f.path || '';
@@ -658,34 +644,78 @@ export class VirtualizedFileList {
           .filter(Boolean);
       }
 
-      appStore.setActiveDrag(null);
-
-      if (sources.length > 0) {
-        const dest = appStore.getActiveTab(this.paneId).currentPath;
-        if (dest) {
-          // If dropping into the exact same folder where items already exist, ignore unless copying
-          const isSameFolder = sources.every((s) => {
-            const parent = s.replace(/[\\/][^\\/]+$/, '').toLowerCase();
-            return parent === dest.toLowerCase();
-          });
-          const isSamePane = sourcePane === this.paneId;
-
-          if (!isSameFolder || !isSamePane || e.ctrlKey) {
-            window.dispatchEvent(
-              new CustomEvent('app:cross-pane-transfer', {
-                detail: {
-                  sources,
-                  destination: dest,
-                  mode: e.ctrlKey ? 'COPY' : 'MOVE',
-                  sourcePane: sourcePane || this.paneId,
-                  destPane: this.paneId,
-                },
-              })
-            );
-          }
-        }
-      }
+      this.executeInternalDrop(dest, this.paneId, e.ctrlKey, fallbackSources);
     });
+  }
+
+  public executeInternalDrop(
+    destinationPath: string,
+    destPaneId: PaneId,
+    isCopyMode: boolean,
+    fallbackSources?: string[]
+  ) {
+    let sources: string[] = [];
+    let sourcePane: PaneId | undefined = undefined;
+
+    // 1. Check in-memory active drag state
+    const activeDrag = appStore.getActiveDrag();
+    if (activeDrag && activeDrag.sources?.length > 0) {
+      sources = [...activeDrag.sources];
+      sourcePane = activeDrag.sourcePane;
+    }
+
+    // 2. Check fallback sources (e.g. from desktop or external explorer)
+    if (sources.length === 0 && fallbackSources && fallbackSources.length > 0) {
+      sources = [...fallbackSources];
+    }
+
+    // Clean up drag states and visual indicators immediately
+    appStore.setActiveDrag(null);
+    appStore.setHoveredDropTarget(null);
+    document.querySelectorAll('.folder-drop-target').forEach((t) => t.classList.remove('folder-drop-target'));
+    document.querySelectorAll('.drag-over-active').forEach((t) => t.classList.remove('drag-over-active'));
+
+    if (sources.length === 0 || !destinationPath) {
+      return;
+    }
+
+    // 3. Prevent dropping a folder into itself or its own subdirectories
+    const destClean = destinationPath.replace(/[\\/]+$/, '').toLowerCase();
+    const validSources = sources.filter((src) => {
+      const srcClean = src.replace(/[\\/]+$/, '').toLowerCase();
+      if (srcClean === destClean) return false;
+      if (destClean.startsWith(srcClean + '\\') || destClean.startsWith(srcClean + '/')) return false;
+      return true;
+    });
+
+    if (validSources.length === 0) {
+      return;
+    }
+
+    // 4. If dropping into the exact same folder within the same pane, ignore unless copying
+    const isSameFolder = validSources.every((s) => {
+      const parent = s.replace(/[\\/][^\\/]+$/, '').toLowerCase();
+      return parent === destClean;
+    });
+    const isSamePane = sourcePane === destPaneId;
+    if (isSameFolder && isSamePane && !isCopyMode) {
+      return;
+    }
+
+    const mode = isCopyMode || !sourcePane ? 'COPY' : 'MOVE';
+
+    // 5. Trigger cross-pane transfer
+    window.dispatchEvent(
+      new CustomEvent('app:cross-pane-transfer', {
+        detail: {
+          sources: validSources,
+          destination: destinationPath,
+          mode,
+          sourcePane: sourcePane || destPaneId,
+          destPane: destPaneId,
+        },
+      })
+    );
   }
 
   private attachGlobalKeyboard() {

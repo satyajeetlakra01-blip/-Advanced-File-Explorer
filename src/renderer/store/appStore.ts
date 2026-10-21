@@ -36,6 +36,12 @@ export interface ActiveDrag {
   sourcePane: PaneId;
 }
 
+export interface HoveredDropTarget {
+  type: 'folder' | 'pane' | 'breadcrumb' | 'sidebar';
+  path: string;
+  paneId?: PaneId;
+}
+
 export interface AppState {
   // Dual-Pane & Tab architecture
   isDualPane: boolean;
@@ -66,6 +72,7 @@ export interface AppState {
   filterQuery: string;
   statusMessage: string;
   activeDrag: ActiveDrag | null;
+  hoveredDropTarget: HoveredDropTarget | null;
 }
 
 type Listener = (state: AppState) => void;
@@ -109,6 +116,7 @@ class AppStore {
     filterQuery: '',
     statusMessage: 'Ready',
     activeDrag: null,
+    hoveredDropTarget: null,
   };
 
   private listeners: Set<Listener> = new Set();
@@ -123,6 +131,14 @@ class AppStore {
 
   getActiveDrag(): ActiveDrag | null {
     return this.state.activeDrag;
+  }
+
+  setHoveredDropTarget(target: HoveredDropTarget | null) {
+    this.state.hoveredDropTarget = target;
+  }
+
+  getHoveredDropTarget(): HoveredDropTarget | null {
+    return this.state.hoveredDropTarget;
   }
 
   subscribe(listener: Listener): () => void {
