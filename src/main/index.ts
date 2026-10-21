@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell, protocol, net } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import { spawn } from 'child_process';
 import { pathToFileURL } from 'url';
 import { IPC_CHANNELS } from '../shared/ipc-contracts';
@@ -396,7 +397,112 @@ if (!gotTheLock) {
           }
           targetPath = decoded;
         }
-        return net.fetch(pathToFileURL(targetPath).toString());
+
+        if (!targetPath || !fsSync.existsSync(targetPath)) {
+          return new Response('File not found', { status: 404 });
+        }
+
+        const stat = fsSync.statSync(targetPath);
+        if (stat.isDirectory()) {
+          return new Response('Cannot stream directory', { status: 400 });
+        }
+
+        const fileSize = stat.size;
+        const ext = path.extname(targetPath).toLowerCase().replace(/^\./, '');
+        const MIME_MAP: Record<string, string> = {
+          mp4: 'video/mp4',
+          webm: 'video/webm',
+          mov: 'video/quicktime',
+          avi: 'video/x-msvideo',
+          mkv: 'video/x-matroska',
+          m4v: 'video/mp4',
+          flv: 'video/x-flv',
+          wmv: 'video/x-ms-wmv',
+          mp3: 'audio/mpeg',
+          wav: 'audio/wav',
+          ogg: 'audio/ogg',
+          flac: 'audio/flac',
+          aac: 'audio/aac',
+          m4a: 'audio/mp4',
+          opus: 'audio/opus',
+          jpg: 'image/jpeg',
+          jpeg: 'image/jpeg',
+          png: 'image/png',
+          gif: 'image/gif',
+          webp: 'image/webp',
+          svg: 'image/svg+xml',
+          ico: 'image/x-icon',
+          avif: 'image/avif',
+          pdf: 'application/pdf',
+        };
+        const mimeType = MIME_MAP[ext] || 'application/octet-stream';
+        const rangeHeader = request.headers.get('range');
+
+        // Handle HTTP Range header for smooth video seeking & partial streaming
+        if (rangeHeader) {
+          const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
+          if (match) {
+            let start = match[1] ? parseInt(match[1], 10) : 0;
+            let end = match[2] ? parseInt(match[2], 10) : fileSize - 1;
+
+            if (isNaN(start)) start = 0;
+            if (isNaN(end) || end >= fileSize) end = fileSize - 1;
+
+            if (start > end || start >= fileSize) {
+              return new Response(null, {
+                status: 416,
+                headers: {
+                  'Content-Range': `bytes */${fileSize}`,
+                },
+              });
+            }
+
+            const chunkSize = end - start + 1;
+            const fileStream = fsSync.createReadStream(targetPath, { start, end });
+            const readableStream = new ReadableStream({
+              start(controller) {
+                fileStream.on('data', (chunk) => controller.enqueue(chunk));
+                fileStream.on('end', () => controller.close());
+                fileStream.on('error', (err) => controller.error(err));
+              },
+              cancel() {
+                fileStream.destroy();
+              },
+            });
+
+            return new Response(readableStream, {
+              status: 206,
+              headers: {
+                'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                'Accept-Ranges': 'bytes',
+                'Content-Length': chunkSize.toString(),
+                'Content-Type': mimeType,
+              },
+            });
+          }
+        }
+
+        // Standard full file response
+        const fileStream = fsSync.createReadStream(targetPath);
+        const readableStream = new ReadableStream({
+          start(controller) {
+            fileStream.on('data', (chunk) => controller.enqueue(chunk));
+            fileStream.on('end', () => controller.close());
+            fileStream.on('error', (err) => controller.error(err));
+          },
+          cancel() {
+            fileStream.destroy();
+          },
+        });
+
+        return new Response(readableStream, {
+          status: 200,
+          headers: {
+            'Accept-Ranges': 'bytes',
+            'Content-Length': fileSize.toString(),
+            'Content-Type': mimeType,
+          },
+        });
       } catch (err) {
         console.error('Failed to stream media asset:', err);
         return new Response('Not found', { status: 404 });

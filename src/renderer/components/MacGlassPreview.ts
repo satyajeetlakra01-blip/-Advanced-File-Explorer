@@ -539,6 +539,7 @@ export class MacGlassPreview {
     video.addEventListener('pause', () => updatePlayState(false));
 
     video.addEventListener('timeupdate', () => {
+      if (isScrubbing) return;
       if (video.duration) {
         const pct = (video.currentTime / video.duration) * 100;
         if (progress) progress.style.width = `${pct}%`;
@@ -572,42 +573,86 @@ export class MacGlassPreview {
       }
     });
 
-    // Interactive timeline scrubbing & sliding
+    // Interactive timeline scrubbing & sliding with PointerEvents
     let isScrubbing = false;
+    let wasPlayingBeforeScrub = false;
 
-    const scrub = (clientX: number) => {
-      if (!timeline || !video.duration) return;
-      const rect = timeline.getBoundingClientRect();
-      const clickX = clientX - rect.left;
-      const pct = Math.max(0, Math.min(1, clickX / rect.width));
-      video.currentTime = pct * video.duration;
-      if (progress) progress.style.width = `${pct * 100}%`;
-      if (timeCur) timeCur.textContent = formatTime(video.currentTime);
+    const updateSliderUI = (pct: number) => {
+      const clampedPct = Math.max(0, Math.min(1, pct));
+      if (progress) progress.style.width = `${clampedPct * 100}%`;
+      if (timeCur && video.duration) {
+        timeCur.textContent = formatTime(clampedPct * video.duration);
+      }
     };
 
-    timeline?.addEventListener('mousedown', (e) => {
+    const getTimelinePct = (clientX: number): number => {
+      if (!timeline) return 0;
+      const rect = timeline.getBoundingClientRect();
+      if (rect.width <= 0) return 0;
+      const clickX = clientX - rect.left;
+      return Math.max(0, Math.min(1, clickX / rect.width));
+    };
+
+    const seekTo = (pct: number) => {
+      if (!video.duration || isNaN(video.duration)) return;
+      const targetTime = Math.max(0, Math.min(video.duration, pct * video.duration));
+      if (isFinite(targetTime)) {
+        video.currentTime = targetTime;
+      }
+    };
+
+    timeline?.addEventListener('pointerdown', (e: PointerEvent) => {
       e.stopPropagation();
       e.preventDefault();
       isScrubbing = true;
-      scrub(e.clientX);
+      timeline.classList.add('scrubbing');
+      playerWrap?.classList.add('user-active');
 
-      const onMouseMove = (moveEvent: MouseEvent) => {
-        if (!isScrubbing) return;
-        moveEvent.stopPropagation();
-        scrub(moveEvent.clientX);
-      };
+      try {
+        timeline.setPointerCapture(e.pointerId);
+      } catch {}
 
-      const onMouseUp = (upEvent: MouseEvent) => {
-        if (!isScrubbing) return;
-        isScrubbing = false;
-        scrub(upEvent.clientX);
-        window.removeEventListener('mousemove', onMouseMove);
-        window.removeEventListener('mouseup', onMouseUp);
-      };
+      wasPlayingBeforeScrub = !video.paused && !video.ended;
+      if (wasPlayingBeforeScrub) {
+        video.pause();
+      }
 
-      window.addEventListener('mousemove', onMouseMove);
-      window.addEventListener('mouseup', onMouseUp);
+      const pct = getTimelinePct(e.clientX);
+      updateSliderUI(pct);
+      seekTo(pct);
     });
+
+    timeline?.addEventListener('pointermove', (e: PointerEvent) => {
+      if (!isScrubbing) return;
+      e.stopPropagation();
+      const pct = getTimelinePct(e.clientX);
+      updateSliderUI(pct);
+      seekTo(pct);
+    });
+
+    const onPointerEnd = (e: PointerEvent) => {
+      if (!isScrubbing) return;
+      isScrubbing = false;
+      timeline?.classList.remove('scrubbing');
+
+      try {
+        if (timeline?.hasPointerCapture(e.pointerId)) {
+          timeline.releasePointerCapture(e.pointerId);
+        }
+      } catch {}
+
+      const pct = getTimelinePct(e.clientX);
+      updateSliderUI(pct);
+      seekTo(pct);
+
+      if (wasPlayingBeforeScrub) {
+        video.play().catch(() => {});
+      }
+      scheduleHide();
+    };
+
+    timeline?.addEventListener('pointerup', onPointerEnd);
+    timeline?.addEventListener('pointercancel', onPointerEnd);
 
     // Auto-hide controls: show on any mouse movement inside playerWrap.
     // Hide only after 1 second of NO movement (not on mouseleave).
@@ -620,9 +665,11 @@ export class MacGlassPreview {
 
     const scheduleHide = () => {
       if (hideTimer) clearTimeout(hideTimer);
-      if (!video.paused && !video.ended) {
+      if (!video.paused && !video.ended && !isScrubbing) {
         hideTimer = setTimeout(() => {
-          playerWrap?.classList.remove('user-active');
+          if (!isScrubbing) {
+            playerWrap?.classList.remove('user-active');
+          }
         }, 1000);
       }
     };
