@@ -221,10 +221,21 @@ export class HeaderBar {
       });
 
       // Breadcrumb drop target for multi-file dragging
+      segment.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        segment.classList.add('breadcrumb-drop-target');
+      });
+
       segment.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (e.dataTransfer) e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
+        if (e.dataTransfer) {
+          const allowed = (e.dataTransfer.effectAllowed || '').toLowerCase();
+          e.dataTransfer.dropEffect =
+            e.ctrlKey || (allowed !== 'move' && allowed !== 'copymove' && allowed !== 'all' && allowed !== 'uninitialized' && allowed !== '')
+              ? 'copy'
+              : 'move';
+        }
         segment.classList.add('breadcrumb-drop-target');
       });
 

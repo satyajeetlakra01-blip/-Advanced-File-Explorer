@@ -422,12 +422,21 @@ export class VirtualizedFileList {
 
       // Drag target: Allow dropping files directly into collapsed folder items!
       if (item.isDirectory) {
+        el.addEventListener('dragenter', (e) => {
+          (e as DragEvent).preventDefault();
+          el.classList.add('folder-drop-target');
+        });
+
         el.addEventListener('dragover', (e) => {
           const dragEvent = e as DragEvent;
           dragEvent.preventDefault();
           dragEvent.stopPropagation();
           if (dragEvent.dataTransfer) {
-            dragEvent.dataTransfer.dropEffect = dragEvent.ctrlKey ? 'copy' : 'move';
+            const allowed = (dragEvent.dataTransfer.effectAllowed || '').toLowerCase();
+            dragEvent.dataTransfer.dropEffect =
+              dragEvent.ctrlKey || (allowed !== 'move' && allowed !== 'copymove' && allowed !== 'all' && allowed !== 'uninitialized' && allowed !== '')
+                ? 'copy'
+                : 'move';
           }
           el.classList.add('folder-drop-target');
           appStore.setHoveredDropTarget({
@@ -593,10 +602,18 @@ export class VirtualizedFileList {
   }
 
   private attachDragAndDrop() {
+    this.container.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+    });
+
     this.container.addEventListener('dragover', (e) => {
       e.preventDefault();
       if (e.dataTransfer) {
-        e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
+        const allowed = (e.dataTransfer.effectAllowed || '').toLowerCase();
+        e.dataTransfer.dropEffect =
+          e.ctrlKey || (allowed !== 'move' && allowed !== 'copymove' && allowed !== 'all' && allowed !== 'uninitialized' && allowed !== '')
+            ? 'copy'
+            : 'move';
       }
       this.container.classList.add('drag-over-active');
       const activePath = appStore.getActiveTab(this.paneId).currentPath;

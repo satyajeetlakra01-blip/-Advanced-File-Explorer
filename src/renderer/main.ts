@@ -244,6 +244,31 @@ async function bootstrap() {
     }
   });
 
+  // Global dragover & dragenter: prevent Chromium from showing the forbidden/error cursor (🚫)
+  window.addEventListener('dragenter', (e: DragEvent) => {
+    e.preventDefault();
+  });
+
+  window.addEventListener('dragover', (e: DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer) {
+      const allowed = (e.dataTransfer.effectAllowed || '').toLowerCase();
+      if (e.ctrlKey) {
+        e.dataTransfer.dropEffect = 'copy';
+      } else if (
+        allowed === 'move' ||
+        allowed === 'copymove' ||
+        allowed === 'all' ||
+        allowed === 'uninitialized' ||
+        allowed === ''
+      ) {
+        e.dataTransfer.dropEffect = 'move';
+      } else {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    }
+  });
+
   // Global dragleave: clear hover drop targets if drag exits the application window (e.g. into Chrome/WhatsApp/Desktop)
   window.addEventListener('dragleave', (e: DragEvent) => {
     if (

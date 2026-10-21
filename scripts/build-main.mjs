@@ -1,4 +1,5 @@
 import * as esbuild from 'esbuild';
+import * as fs from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -56,6 +57,13 @@ async function buildMain() {
     sourcemap: true,
     external: ['electron'],
   });
+
+  // 5. Copy static assets to dist/assets
+  const assetsSrc = resolve(root, 'assets');
+  const assetsDest = resolve(root, 'dist/assets');
+  if (fs.existsSync(assetsSrc)) {
+    fs.cpSync(assetsSrc, assetsDest, { recursive: true, force: true });
+  }
 
   console.log('[build-main] Compilation completed successfully.');
 }

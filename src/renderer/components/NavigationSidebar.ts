@@ -86,11 +86,20 @@ export class NavigationSidebar {
       });
 
       // Drag and drop target support on sidebar items
+      item.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        item.classList.add('sidebar-drop-target');
+      });
+
       item.addEventListener('dragover', (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (e.dataTransfer) {
-          e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
+          const allowed = (e.dataTransfer.effectAllowed || '').toLowerCase();
+          e.dataTransfer.dropEffect =
+            e.ctrlKey || (allowed !== 'move' && allowed !== 'copymove' && allowed !== 'all' && allowed !== 'uninitialized' && allowed !== '')
+              ? 'copy'
+              : 'move';
         }
         item.classList.add('sidebar-drop-target');
       });
