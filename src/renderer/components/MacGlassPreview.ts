@@ -572,14 +572,41 @@ export class MacGlassPreview {
       }
     });
 
-    timeline?.addEventListener('click', (e) => {
-      e.stopPropagation();
+    // Interactive timeline scrubbing & sliding
+    let isScrubbing = false;
+
+    const scrub = (clientX: number) => {
+      if (!timeline || !video.duration) return;
       const rect = timeline.getBoundingClientRect();
-      const clickX = e.clientX - rect.left;
+      const clickX = clientX - rect.left;
       const pct = Math.max(0, Math.min(1, clickX / rect.width));
-      if (video.duration) {
-        video.currentTime = pct * video.duration;
-      }
+      video.currentTime = pct * video.duration;
+      if (progress) progress.style.width = `${pct * 100}%`;
+      if (timeCur) timeCur.textContent = formatTime(video.currentTime);
+    };
+
+    timeline?.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      isScrubbing = true;
+      scrub(e.clientX);
+
+      const onMouseMove = (moveEvent: MouseEvent) => {
+        if (!isScrubbing) return;
+        moveEvent.stopPropagation();
+        scrub(moveEvent.clientX);
+      };
+
+      const onMouseUp = (upEvent: MouseEvent) => {
+        if (!isScrubbing) return;
+        isScrubbing = false;
+        scrub(upEvent.clientX);
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+      };
+
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
     });
 
     // Auto-hide controls: show on any mouse movement inside playerWrap.
@@ -658,7 +685,9 @@ export class MacGlassPreview {
               </button>
               <span class="mgp-video-time" id="mgp-video-time-cur">0:00</span>
               <div class="mgp-video-timeline" id="mgp-video-timeline">
-                <div class="mgp-video-progress" id="mgp-video-progress"></div>
+                <div class="mgp-video-progress" id="mgp-video-progress">
+                  <div class="mgp-video-thumb"></div>
+                </div>
               </div>
               <span class="mgp-video-time" id="mgp-video-time-dur">0:00</span>
               <button class="mgp-video-mini-btn" id="mgp-video-mini-mute" title="Mute/Unmute">

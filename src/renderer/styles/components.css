@@ -2125,25 +2125,48 @@
 
 .mgp-video-timeline {
   flex: 1;
-  height: 5px;
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 3px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
   position: relative;
   cursor: pointer;
-  overflow: hidden;
+  padding: 6px 0; /* Expanded hit area so it's super easy to grab and slide */
+  background-clip: content-box;
+  box-sizing: content-box;
   transition: height 0.12s ease;
 }
 
 .mgp-video-timeline:hover {
-  height: 7px;
+  height: 8px;
 }
 
 .mgp-video-progress {
   height: 100%;
   width: 0%;
-  background: linear-gradient(90deg, #60a5fa, #818cf8);
-  border-radius: 3px;
+  background: linear-gradient(90deg, #38bdf8, #818cf8);
+  border-radius: 4px;
   position: relative;
+  pointer-events: none;
+}
+
+.mgp-video-thumb {
+  position: absolute;
+  right: -6px;
+  top: 50%;
+  transform: translateY(-50%) scale(0.85);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5), 0 0 8px rgba(96, 165, 250, 0.8);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  pointer-events: none;
+}
+
+.mgp-video-timeline:hover .mgp-video-thumb,
+.mgp-video-timeline:active .mgp-video-thumb {
+  transform: translateY(-50%) scale(1.15);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6), 0 0 12px rgba(129, 140, 248, 1);
 }
 
 /* PDF via webview */
