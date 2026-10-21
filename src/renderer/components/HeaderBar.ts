@@ -237,19 +237,39 @@ export class HeaderBar {
         e.stopPropagation();
         segment.classList.remove('breadcrumb-drop-target');
 
-        const raw = e.dataTransfer?.getData('application/afe-pane-transfer');
         let sources: string[] = [];
         let sourcePane = appStore.getState().activePaneId;
 
-        if (raw) {
-          try {
-            const p = JSON.parse(raw);
-            sources = p.sources || [];
-            sourcePane = p.sourcePane || sourcePane;
-          } catch {}
-        } else if (e.dataTransfer?.files) {
-          sources = Array.from(e.dataTransfer.files).map((f: any) => f.path).filter(Boolean);
+        const activeDrag = appStore.getActiveDrag();
+        if (activeDrag && activeDrag.sources?.length > 0) {
+          sources = [...activeDrag.sources];
+          sourcePane = activeDrag.sourcePane;
         }
+
+        if (sources.length === 0) {
+          const raw = e.dataTransfer?.getData('application/afe-pane-transfer');
+          if (raw) {
+            try {
+              const p = JSON.parse(raw);
+              sources = p.sources || [];
+              sourcePane = p.sourcePane || sourcePane;
+            } catch {}
+          }
+        }
+
+        if (sources.length === 0 && e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+          sources = Array.from(e.dataTransfer.files)
+            .map((f: any) => {
+              try {
+                return window.electronApi.getPathForFile?.(f) || f.path || '';
+              } catch {
+                return f.path || '';
+              }
+            })
+            .filter(Boolean);
+        }
+
+        appStore.setActiveDrag(null);
 
         const validSources = sources.filter((src) => {
           const s = src.replace(/[\\/]+$/, '').toLowerCase();

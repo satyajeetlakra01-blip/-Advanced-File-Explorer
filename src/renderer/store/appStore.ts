@@ -31,6 +31,11 @@ function createInitialTab(path = '', title = 'Home'): TabState {
   };
 }
 
+export interface ActiveDrag {
+  sources: string[];
+  sourcePane: PaneId;
+}
+
 export interface AppState {
   // Dual-Pane & Tab architecture
   isDualPane: boolean;
@@ -60,6 +65,7 @@ export interface AppState {
   showHidden: boolean;
   filterQuery: string;
   statusMessage: string;
+  activeDrag: ActiveDrag | null;
 }
 
 type Listener = (state: AppState) => void;
@@ -102,12 +108,21 @@ class AppStore {
     showHidden: false,
     filterQuery: '',
     statusMessage: 'Ready',
+    activeDrag: null,
   };
 
   private listeners: Set<Listener> = new Set();
 
   getState(): AppState {
     return this.state;
+  }
+
+  setActiveDrag(drag: ActiveDrag | null) {
+    this.state.activeDrag = drag;
+  }
+
+  getActiveDrag(): ActiveDrag | null {
+    return this.state.activeDrag;
   }
 
   subscribe(listener: Listener): () => void {

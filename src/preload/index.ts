@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC_CHANNELS, IpcApi } from '../shared/ipc-contracts';
 import {
   DriveInfo,
@@ -83,6 +83,14 @@ const api: IpcApi = {
   writeTextFile: (filePath: string, content: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE_WRITE_TEXT, filePath, content),
   runCodeSandbox: (params: { code: string; language: string; filePath?: string }) => ipcRenderer.invoke(IPC_CHANNELS.CODE_RUN_SANDBOX, params),
   startExternalDrag: (paths: string[]) => ipcRenderer.send(IPC_CHANNELS.SHELL_START_DRAG, paths),
+  getPathForFile: (file: File) => {
+    try {
+      if (webUtils && typeof webUtils.getPathForFile === 'function') {
+        return webUtils.getPathForFile(file);
+      }
+    } catch {}
+    return (file as any)?.path || '';
+  },
   statFile: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.SHELL_STAT_FILE, filePath),
 };
 

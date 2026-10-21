@@ -107,23 +107,41 @@ export class NavigationSidebar {
         e.stopPropagation();
         item.classList.remove('sidebar-drop-target');
 
-        const raw = e.dataTransfer?.getData('application/afe-pane-transfer');
         let sources: string[] = [];
         let sourcePane: any = appStore.getState().activePaneId;
 
-        if (raw) {
-          try {
-            const payload = JSON.parse(raw);
-            sources = payload.sources || [];
-            sourcePane = payload.sourcePane || sourcePane;
-          } catch (err) {
-            console.error('Failed to parse sidebar drop payload:', err);
+        const activeDrag = appStore.getActiveDrag();
+        if (activeDrag && activeDrag.sources?.length > 0) {
+          sources = [...activeDrag.sources];
+          sourcePane = activeDrag.sourcePane;
+        }
+
+        if (sources.length === 0) {
+          const raw = e.dataTransfer?.getData('application/afe-pane-transfer');
+          if (raw) {
+            try {
+              const payload = JSON.parse(raw);
+              sources = payload.sources || [];
+              sourcePane = payload.sourcePane || sourcePane;
+            } catch (err) {
+              console.error('Failed to parse sidebar drop payload:', err);
+            }
           }
-        } else if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+        }
+
+        if (sources.length === 0 && e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
           sources = Array.from(e.dataTransfer.files)
-            .map((f: any) => f.path)
+            .map((f: any) => {
+              try {
+                return window.electronApi.getPathForFile?.(f) || f.path || '';
+              } catch {
+                return f.path || '';
+              }
+            })
             .filter(Boolean);
         }
+
+        appStore.setActiveDrag(null);
 
         // Do not drop items into themselves
         const validSources = sources.filter((src) => {

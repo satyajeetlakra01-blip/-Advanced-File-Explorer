@@ -81,6 +81,7 @@ export interface IpcApi {
   openPath(path: string): Promise<string>;
   showInFolder(path: string): Promise<void>;
   startExternalDrag(paths: string[]): void;
+  getPathForFile?(file: File): string;
   statFile(filePath: string): Promise<{ sizeBytes: number; modifiedMs: number } | null>;
   readTextFile(filePath: string): Promise<{ success: boolean; content?: string; sizeBytes?: number; modifiedMs?: number; error?: string }>;
   writeTextFile(filePath: string, content: string): Promise<{ success: boolean; sizeBytes?: number; modifiedMs?: number; error?: string }>;

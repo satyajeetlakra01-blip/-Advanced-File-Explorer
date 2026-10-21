@@ -372,13 +372,36 @@ export class VirtualizedFileList {
           appStore.setSelection([item.path], this.paneId);
         }
 
-        // Trigger native OS drag session with Electron webContents.startDrag
+        // 1. Store active drag state in appStore for 100% reliable internal drop
+        appStore.setActiveDrag({
+          sources,
+          sourcePane: this.paneId,
+        });
+
+        // 2. Populate HTML5 dataTransfer
+        if (dragEvent.dataTransfer) {
+          const payload = JSON.stringify({
+            sources,
+            sourcePane: this.paneId,
+          });
+          dragEvent.dataTransfer.setData('application/afe-pane-transfer', payload);
+          dragEvent.dataTransfer.setData('text/plain', sources.join('\n'));
+          const uriList = sources.map((p) => `file:///${p.replace(/\\/g, '/')}`).join('\r\n');
+          dragEvent.dataTransfer.setData('text/uri-list', uriList);
+          dragEvent.dataTransfer.effectAllowed = 'copyMove';
+        }
+
+        // 3. Trigger native OS drag session with Electron webContents.startDrag
         dragEvent.preventDefault();
         try {
           window.electronApi.startExternalDrag(sources);
         } catch (err) {
           console.error('[startExternalDrag] error:', err);
         }
+      });
+
+      el.addEventListener('dragend', () => {
+        appStore.setActiveDrag(null);
       });
 
       // Drag target: Allow dropping files directly into collapsed folder items!
@@ -407,23 +430,42 @@ export class VirtualizedFileList {
           dragEvent.stopPropagation();
           el.classList.remove('folder-drop-target');
 
-          const raw = dragEvent.dataTransfer?.getData('application/afe-pane-transfer');
           let sources: string[] = [];
           let sourcePane = this.paneId;
 
-          if (raw) {
-            try {
-              const payload = JSON.parse(raw);
-              sources = payload.sources || [];
-              sourcePane = payload.sourcePane || this.paneId;
-            } catch (err) {
-              console.error('Failed to parse folder drop payload:', err);
+          // 1. Check in-memory active drag state
+          const activeDrag = appStore.getActiveDrag();
+          if (activeDrag && activeDrag.sources?.length > 0) {
+            sources = [...activeDrag.sources];
+            sourcePane = activeDrag.sourcePane;
+          }
+
+          // 2. Check HTML5 payload
+          if (sources.length === 0) {
+            const raw = dragEvent.dataTransfer?.getData('application/afe-pane-transfer');
+            if (raw) {
+              try {
+                const payload = JSON.parse(raw);
+                sources = payload.sources || [];
+                sourcePane = payload.sourcePane || this.paneId;
+              } catch (err) {}
             }
-          } else if (dragEvent.dataTransfer?.files && dragEvent.dataTransfer.files.length > 0) {
+          }
+
+          // 3. Check dropped files (e.g. from desktop or external explorer)
+          if (sources.length === 0 && dragEvent.dataTransfer?.files && dragEvent.dataTransfer.files.length > 0) {
             sources = Array.from(dragEvent.dataTransfer.files)
-              .map((f: any) => f.path)
+              .map((f: any) => {
+                try {
+                  return window.electronApi.getPathForFile?.(f) || f.path || '';
+                } catch {
+                  return f.path || '';
+                }
+              })
               .filter(Boolean);
           }
+
+          appStore.setActiveDrag(null);
 
           // Do not drop a folder into itself or into its own subdirectories
           const destClean = item.path.replace(/[\\/]+$/, '').toLowerCase();
@@ -581,37 +623,61 @@ export class VirtualizedFileList {
       e.preventDefault();
       this.container.classList.remove('drag-over-active');
 
-      const raw = e.dataTransfer?.getData('application/afe-pane-transfer');
       let sources: string[] = [];
       let sourcePane: PaneId | undefined = undefined;
 
-      if (raw) {
-        try {
-          const payload = JSON.parse(raw);
-          sources = payload.sources || [];
-          sourcePane = payload.sourcePane;
-        } catch (err) {
-          console.error('Failed to parse drag transfer payload:', err);
+      // 1. Check in-memory active drag state
+      const activeDrag = appStore.getActiveDrag();
+      if (activeDrag && activeDrag.sources?.length > 0) {
+        sources = [...activeDrag.sources];
+        sourcePane = activeDrag.sourcePane;
+      }
+
+      // 2. Check HTML5 payload
+      if (sources.length === 0) {
+        const raw = e.dataTransfer?.getData('application/afe-pane-transfer');
+        if (raw) {
+          try {
+            const payload = JSON.parse(raw);
+            sources = payload.sources || [];
+            sourcePane = payload.sourcePane;
+          } catch (err) {}
         }
-      } else if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+      }
+
+      // 3. Check dropped files (e.g. from desktop or external explorer)
+      if (sources.length === 0 && e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
         sources = Array.from(e.dataTransfer.files)
-          .map((f: any) => f.path)
+          .map((f: any) => {
+            try {
+              return window.electronApi.getPathForFile?.(f) || f.path || '';
+            } catch {
+              return f.path || '';
+            }
+          })
           .filter(Boolean);
       }
+
+      appStore.setActiveDrag(null);
 
       if (sources.length > 0) {
         const dest = appStore.getActiveTab(this.paneId).currentPath;
         if (dest) {
-          // If moving within the exact same pane and folder, ignore unless copying
+          // If dropping into the exact same folder where items already exist, ignore unless copying
+          const isSameFolder = sources.every((s) => {
+            const parent = s.replace(/[\\/][^\\/]+$/, '').toLowerCase();
+            return parent === dest.toLowerCase();
+          });
           const isSamePane = sourcePane === this.paneId;
-          if (!isSamePane || e.ctrlKey) {
+
+          if (!isSameFolder || !isSamePane || e.ctrlKey) {
             window.dispatchEvent(
               new CustomEvent('app:cross-pane-transfer', {
                 detail: {
                   sources,
                   destination: dest,
                   mode: e.ctrlKey ? 'COPY' : 'MOVE',
-                  sourcePane,
+                  sourcePane: sourcePane || this.paneId,
                   destPane: this.paneId,
                 },
               })
