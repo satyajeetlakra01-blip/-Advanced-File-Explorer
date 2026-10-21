@@ -20,17 +20,26 @@ export class CodeSandboxModal {
   private activeIndex = -1;
   private consoleLogs: { type: 'info' | 'warn' | 'error' | 'success'; text: string; time: string }[] = [];
   private isRunning = false;
+  private showPreview = false;
+  private previewTimer: any = null;
 
   constructor() {
     window.addEventListener('app:open-code-sandbox', (e: Event) => {
-      const detail = (e as CustomEvent).detail as { path: string };
+      const detail = (e as CustomEvent).detail as { path: string; preview?: boolean };
       if (detail?.path) {
-        this.open(detail.path);
+        this.open(detail.path, detail.preview);
       }
     });
   }
 
-  public async open(filePath: string) {
+  public async open(filePath: string, forcePreview?: boolean) {
+    const ext = filePath.toLowerCase().split('.').pop() || '';
+    if (forcePreview !== undefined) {
+      this.showPreview = forcePreview;
+    } else if (['html', 'htm', 'svg'].includes(ext)) {
+      this.showPreview = true;
+    }
+
     // If already open, switch to it
     const existingIndex = this.openFiles.findIndex(
       (f) => f.path.toLowerCase() === filePath.toLowerCase()
@@ -39,6 +48,9 @@ export class CodeSandboxModal {
       this.activeIndex = existingIndex;
       this.render();
       this.focusEditor();
+      if (this.showPreview) {
+        this.updateLivePreview();
+      }
       return;
     }
 
@@ -69,6 +81,9 @@ export class CodeSandboxModal {
       this.addLog('info', `Opened '${name}' (${language})`);
       this.render();
       this.focusEditor();
+      if (this.showPreview) {
+        this.updateLivePreview();
+      }
     } catch (err: any) {
       Modals.showToast(`Cannot open file in sandbox: ${err.message}`);
     }
@@ -148,6 +163,9 @@ export class CodeSandboxModal {
         Modals.showToast(`Saved '${file.name}'`);
         this.renderTabs();
         this.updateStatusBar();
+        if (this.showPreview) {
+          this.updateLivePreview();
+        }
       } else {
         throw new Error(res.error || 'Write error');
       }
@@ -246,7 +264,7 @@ export class CodeSandboxModal {
         <div class="sandbox-tabs-bar" id="sandbox-tabs"></div>
 
         <!-- Main Editor Body -->
-        <div class="sandbox-editor-split">
+        <div class="sandbox-editor-split ${this.showPreview ? 'has-preview' : ''}">
           <div class="sandbox-editor-pane">
             <div class="sandbox-gutter" id="sandbox-gutter">
               ${lineNumbersHtml}
@@ -261,8 +279,29 @@ export class CodeSandboxModal {
             >${this.escapeHtml(file.content)}</textarea>
           </div>
 
+          ${
+            this.showPreview
+              ? `
+            <div class="sandbox-live-preview-pane" id="sandbox-preview-container">
+              <div class="sandbox-preview-toolbar">
+                <div class="preview-toolbar-left">
+                  <span class="preview-tag">🌐 Live Web Preview</span>
+                  <span class="preview-url">${this.escapeHtml(file.name)}</span>
+                </div>
+                <div class="preview-toolbar-right">
+                  <button class="sandbox-mini-btn" id="btn-refresh-preview" title="Reload Preview">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    <span>Reload</span>
+                  </button>
+                </div>
+              </div>
+              <iframe id="sandbox-iframe" class="sandbox-preview-frame" sandbox="allow-scripts allow-modals"></iframe>
+            </div>`
+              : ''
+          }
+
           <!-- Integrated Bottom Debug Console -->
-          <div class="sandbox-console-pane">
+          <div class="sandbox-console-pane ${this.showPreview ? 'preview-mode' : ''}">
             <div class="sandbox-console-header">
               <div class="sandbox-console-title">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -328,6 +367,9 @@ export class CodeSandboxModal {
         this.activeIndex = idx;
         this.render();
         this.focusEditor();
+        if (this.showPreview) {
+          this.updateLivePreview();
+        }
       });
     });
 
@@ -365,6 +407,13 @@ export class CodeSandboxModal {
     if (!actionsContainer) return;
 
     actionsContainer.innerHTML = `
+      <button class="sandbox-action-btn ${this.showPreview ? 'active-preview' : ''}" id="btn-toggle-preview" title="Toggle Live Web Browser Preview (HTML, CSS, JS)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+        </svg>
+        <span>${this.showPreview ? 'Hide Preview' : 'Live Preview'}</span>
+      </button>
+
       <button class="sandbox-btn-run ${this.isRunning ? 'running' : ''}" id="btn-run-code" title="Execute script in sandbox (Ctrl+Enter)">
         ${
           this.isRunning
@@ -394,6 +443,14 @@ export class CodeSandboxModal {
         </svg>
       </button>
     `;
+
+    actionsContainer.querySelector('#btn-toggle-preview')?.addEventListener('click', () => {
+      this.showPreview = !this.showPreview;
+      this.render();
+      if (this.showPreview) {
+        this.updateLivePreview();
+      }
+    });
 
     actionsContainer.querySelector('#btn-run-code')?.addEventListener('click', () => {
       this.runActiveCode();
@@ -490,6 +547,12 @@ export class CodeSandboxModal {
       this.updateCursorPosition(textarea, file);
       this.renderTabs();
       this.updateStatusBar();
+      this.scheduleLivePreviewUpdate();
+    });
+
+    const btnRefresh = this.overlay?.querySelector('#btn-refresh-preview');
+    btnRefresh?.addEventListener('click', () => {
+      this.updateLivePreview();
     });
 
     // Cursor position tracking on click/keyup
@@ -587,6 +650,81 @@ export class CodeSandboxModal {
         return;
       }
     });
+  }
+
+  private scheduleLivePreviewUpdate() {
+    if (!this.showPreview) return;
+    if (this.previewTimer) clearTimeout(this.previewTimer);
+    this.previewTimer = setTimeout(() => this.updateLivePreview(), 200);
+  }
+
+  private updateLivePreview() {
+    if (!this.showPreview || this.activeIndex < 0 || this.activeIndex >= this.openFiles.length) return;
+    const iframe = this.overlay?.querySelector('#sandbox-iframe') as HTMLIFrameElement | null;
+    if (!iframe) return;
+
+    const file = this.openFiles[this.activeIndex];
+    const ext = file.name.toLowerCase().split('.').pop() || '';
+    let doc = '';
+
+    if (['html', 'htm'].includes(ext)) {
+      doc = file.content;
+    } else if (ext === 'css') {
+      doc = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 24px; background: #ffffff; color: #1e293b; }
+    ${file.content}
+  </style>
+</head>
+<body>
+  <div class="css-preview-root">
+    <h1>CSS Stylesheet Preview</h1>
+    <p class="subtitle">Live preview of styles defined in <code>${this.escapeHtml(file.name)}</code></p>
+    <div style="margin: 16px 0; display: flex; gap: 8px;">
+      <button class="btn btn-primary" style="padding: 8px 16px; cursor: pointer;">Primary Button</button>
+      <button class="btn btn-secondary" style="padding: 8px 16px; cursor: pointer;">Secondary Button</button>
+    </div>
+    <div class="card" style="padding: 16px; border: 1px solid #e2e8f0; border-radius: 8px; margin-top: 16px;">
+      <h3>Card Component</h3>
+      <p>This container demonstrates borders, spacing, colors, and typography from your stylesheet.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+    } else if (ext === 'svg') {
+      doc = `<!DOCTYPE html><html><body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0f172a;">${file.content}</body></html>`;
+    } else if (['js', 'ts', 'jsx', 'tsx'].includes(ext)) {
+      doc = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:monospace;padding:16px;background:#ffffff;color:#0f172a;">
+  <div id="app"></div>
+  <script>
+    const log = (...args) => {
+      const p = document.createElement('div');
+      p.textContent = args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ');
+      document.body.appendChild(p);
+    };
+    console.log = log;
+    try {
+      ${file.content}
+    } catch(err) {
+      const p = document.createElement('div');
+      p.style.color = 'red';
+      p.textContent = 'Runtime error: ' + err.message;
+      document.body.appendChild(p);
+    }
+  </script>
+</body>
+</html>`;
+    } else {
+      doc = `<!DOCTYPE html><html><body style="font-family:monospace;padding:16px;"><pre>${this.escapeHtml(file.content)}</pre></body></html>`;
+    }
+
+    iframe.srcdoc = doc;
   }
 
   private updateCursorPosition(textarea: HTMLTextAreaElement, file: OpenEditorFile) {

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, protocol, net } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, protocol, net, nativeImage } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
@@ -191,24 +191,41 @@ function registerIpcHandlers() {
     shell.showItemInFolder(targetPath);
   });
 
-  // External OS drag-out: drag files from app to Explorer/Chrome/Desktop etc.
-  // Uses ipcMain.on (synchronous) because webContents.startDrag must be called in the ondragstart handler.
+  // External OS drag-out: drag files from app to Explorer/Chrome/WhatsApp/Desktop etc.
+  // Uses ipcMain.on (synchronous) because webContents.startDrag must be called during the ondragstart handler.
   ipcMain.on(IPC_CHANNELS.SHELL_START_DRAG, (event, filePaths: string[]) => {
-    if (!filePaths || filePaths.length === 0) return;
+    if (!filePaths || !Array.isArray(filePaths) || filePaths.length === 0) return;
     try {
-      const firstFile = filePaths[0];
-      const iconPath = path.resolve(__dirname, '../../assets/drag-icon.png');
-      if (filePaths.length === 1) {
+      const validPaths = filePaths.filter((p) => typeof p === 'string' && fsSync.existsSync(p));
+      if (validPaths.length === 0) return;
+
+      const firstFile = validPaths[0];
+      let icon = nativeImage.createEmpty();
+      try {
+        const candidateIcons = [
+          path.resolve(__dirname, '../../assets/drag-icon.png'),
+          path.resolve(__dirname, '../assets/drag-icon.png'),
+          path.resolve(process.cwd(), 'assets/drag-icon.png'),
+        ];
+        for (const c of candidateIcons) {
+          if (fsSync.existsSync(c)) {
+            icon = nativeImage.createFromPath(c);
+            break;
+          }
+        }
+      } catch {}
+
+      if (validPaths.length === 1) {
         event.sender.startDrag({
           file: firstFile,
-          icon: iconPath,
+          icon,
         });
       } else {
-        // Multi-file: Electron accepts `files` array (Electron 12+), cast to bypass older typedefs
+        // Multi-file: Electron accepts `files` array (Electron 12+)
         (event.sender as any).startDrag({
           file: firstFile,
-          files: filePaths,
-          icon: iconPath,
+          files: validPaths,
+          icon,
         });
       }
     } catch (err) {

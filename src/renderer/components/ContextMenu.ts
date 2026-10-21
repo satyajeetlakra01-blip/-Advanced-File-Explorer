@@ -111,6 +111,19 @@ export class ContextMenu {
     const iconBurn = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8.5 14.5A2.5 2.5 0 0011 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 11-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 002.5 2.5z"/></svg>`;
     const iconCode = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>`;
 
+    const ext = item.name.toLowerCase().split('.').pop() || '';
+    const isCodeOrMarkup = [
+      'html', 'htm', 'css', 'scss', 'less',
+      'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs',
+      'json', 'xml', 'svg', 'py', 'php', 'rb',
+      'c', 'cpp', 'h', 'hpp', 'cs', 'java', 'rs', 'go',
+      'sql', 'sh', 'bash', 'ps1', 'bat', 'cmd',
+      'yaml', 'yml', 'toml', 'env', 'ini', 'txt', 'md'
+    ].includes(ext);
+    const isWebFile = ['html', 'htm', 'svg', 'xhtml'].includes(ext);
+
+    const iconGlobe = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
+
     const items: ContextMenuItem[] = [
       {
         label: item.isDirectory ? 'Open Folder' : 'Open File',
@@ -127,15 +140,26 @@ export class ContextMenu {
       ...(!item.isDirectory
         ? [
             {
-              label: 'Edit in Code Sandbox',
+              label: isCodeOrMarkup ? 'Inspect & Edit Code' : 'Edit in Code Editor',
               icon: iconCode,
               shortcut: 'Ctrl+E',
               action: () => {
                 window.dispatchEvent(new CustomEvent('app:open-code-sandbox', { detail: { path: item.path } }));
               },
             },
+            ...(isWebFile
+              ? [
+                  {
+                    label: 'Live Web Preview',
+                    icon: iconGlobe,
+                    action: () => {
+                      window.dispatchEvent(new CustomEvent('app:open-code-sandbox', { detail: { path: item.path, preview: true } }));
+                    },
+                  },
+                ]
+              : []),
             {
-              label: 'Preview File',
+              label: 'Quick Preview',
               icon: iconEye,
               shortcut: 'Space',
               action: () => {

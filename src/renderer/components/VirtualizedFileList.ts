@@ -358,7 +358,7 @@ export class VirtualizedFileList {
         contextMenu.showItemMenu(mouseEvent.clientX, mouseEvent.clientY, item);
       });
 
-      // Drag source
+      // Drag source: Native OS drag out allows dragging directly into external apps (Chrome, WhatsApp, Windows Explorer, etc.)
       el.addEventListener('dragstart', (e) => {
         const dragEvent = e as DragEvent;
         appStore.setActivePane(this.paneId);
@@ -372,51 +372,12 @@ export class VirtualizedFileList {
           appStore.setSelection([item.path], this.paneId);
         }
 
-        if (dragEvent.dataTransfer) {
-          const payload = JSON.stringify({
-            sources,
-            sourcePane: this.paneId,
-          });
-          dragEvent.dataTransfer.setData('application/afe-pane-transfer', payload);
-          dragEvent.dataTransfer.setData('text/plain', sources.join('\n'));
-          // Provide file URIs so external apps (browsers, explorer) can accept drops
-          const uriList = sources.map(p => `file:///${p.replace(/\\/g, '/')}`).join('\r\n');
-          dragEvent.dataTransfer.setData('text/uri-list', uriList);
-          dragEvent.dataTransfer.effectAllowed = 'copyMove';
-
-          // Floating multi-item drag preview badge
-          if (sources.length > 1) {
-            const dragBadge = document.createElement('div');
-            dragBadge.className = 'drag-ghost-badge';
-            dragBadge.style.cssText = 'position:absolute; top:-1000px; left:-1000px; background:rgba(20,24,36,0.95); border:1px solid #ef233c; color:#fff; padding:6px 14px; border-radius:20px; font-size:12px; font-weight:600; display:flex; align-items:center; gap:6px; box-shadow:0 10px 25px rgba(0,0,0,0.7);';
-            dragBadge.innerHTML = `<span>📂</span><span>${sources.length} items</span>`;
-            document.body.appendChild(dragBadge);
-            dragEvent.dataTransfer.setDragImage(dragBadge, 15, 15);
-            setTimeout(() => dragBadge.remove(), 100);
-          }
-        }
-      });
-
-      // External OS drag-out: when drag ends with no internal drop target,
-      // trigger native OS startDrag so files can be dropped into Explorer, Chrome, etc.
-      el.addEventListener('dragend', (e) => {
-        const dragEvent = e as DragEvent;
-        // dropEffect 'none' means the drag was not accepted by any internal drop zone
-        // OR the user dragged outside the app window — trigger native OS drag
-        if (dragEvent.dataTransfer?.dropEffect === 'none') {
-          const activeTab = appStore.getActiveTab(this.paneId);
-          let sources: string[];
-          if (activeTab.selectedPaths.has(item.path)) {
-            sources = Array.from(activeTab.selectedPaths);
-          } else {
-            sources = [item.path];
-          }
-          // Trigger native OS-level drag so external apps can receive the files
-          try {
-            (window.electronApi as any).startExternalDrag?.(sources);
-          } catch {
-            // Silently ignore if not available
-          }
+        // Trigger native OS drag session with Electron webContents.startDrag
+        dragEvent.preventDefault();
+        try {
+          window.electronApi.startExternalDrag(sources);
+        } catch (err) {
+          console.error('[startExternalDrag] error:', err);
         }
       });
 

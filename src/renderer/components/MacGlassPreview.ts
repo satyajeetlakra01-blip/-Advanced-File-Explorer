@@ -35,7 +35,11 @@ function detectType(name: string): PreviewType {
   if (['mp4', 'webm', 'mov', 'avi', 'mkv', 'flv', 'm4v', 'wmv'].includes(ext)) return 'video';
   if (ext === 'pdf') return 'pdf';
   if (['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a', 'opus'].includes(ext)) return 'audio';
-  if (['txt', 'md', 'json', 'xml', 'csv', 'log', 'ini', 'yaml', 'yml', 'toml', 'env'].includes(ext)) return 'text';
+  if ([
+    'txt', 'md', 'json', 'xml', 'csv', 'log', 'ini', 'yaml', 'yml', 'toml', 'env',
+    'html', 'htm', 'css', 'scss', 'less', 'js', 'jsx', 'ts', 'tsx', 'py', 'java',
+    'c', 'cpp', 'h', 'hpp', 'cs', 'php', 'rb', 'go', 'rs', 'sh', 'bash', 'ps1', 'bat', 'sql'
+  ].includes(ext)) return 'text';
   return 'unknown';
 }
 
@@ -268,6 +272,17 @@ export class MacGlassPreview {
           </div>
 
           <div class="mgp-win-caption-controls">
+            ${
+              type === 'text'
+                ? `
+              <button class="mgp-win-btn" id="mgp-btn-edit-code" title="Inspect & Edit in Code Sandbox (Ctrl+E)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+                </svg>
+              </button>
+            `
+                : ''
+            }
             <button class="mgp-win-btn" id="mgp-btn-open" title="Open with default application">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/>
@@ -349,6 +364,15 @@ export class MacGlassPreview {
 
     // Fullscreen toggle
     overlay.querySelector('#mgp-btn-fs')?.addEventListener('click', () => this.toggleFullscreen());
+
+    // Inspect & Edit in Code Sandbox
+    overlay.querySelector('#mgp-btn-edit-code')?.addEventListener('click', () => {
+      if (this.currentFile) {
+        const filePath = this.currentFile.path;
+        this.close();
+        window.dispatchEvent(new CustomEvent('app:open-code-sandbox', { detail: { path: filePath } }));
+      }
+    });
 
     // Open externally
     overlay.querySelector('#mgp-btn-open')?.addEventListener('click', () => {
